@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { generateQRCodeDataUrl as generateQRCodeUtil, type QRCodeColors, type QRCodeOptions } from "../utils/qrGenerator";
+import { QRCodeSVG } from "qrcode.react";
+import type { QRCodeColors } from "../utils/qrGenerator";
 
 export type { QRCodeColors };
 
@@ -26,52 +26,40 @@ export const QRCode: React.FC<QRCodeProps> = ({
   size = 200,
   margin = 2,
   errorCorrectionLevel = "M",
-  roundedCorners = true,
   centerImage,
   centerImageSize = 20,
   className,
   style,
 }) => {
-  const [qrCodeDataUrl, setQrCodeDataUrl] = useState<string>("");
+  // Handle transparent background
+  const bgColor =
+    colors.light === "none" || colors.light === "transparent" || !colors.light
+      ? "transparent"
+      : colors.light;
 
-  useEffect(() => {
-    const generateQRCode = async () => {
-      try {
-        const options: QRCodeOptions = {
-          colors,
-          size,
-          margin,
-          errorCorrectionLevel,
-          roundedCorners,
-          centerImage,
-          centerImageSize,
-        };
-        const dataUrl = await generateQRCodeUtil(url, options);
-        setQrCodeDataUrl(dataUrl);
-      } catch (error) {
-        console.error("Error generating QR code:", error);
+  // Calculate image settings for the logo
+  const imageSettings = centerImage
+    ? {
+        src: centerImage,
+        height: (size * centerImageSize) / 100,
+        width: (size * centerImageSize) / 100,
+        excavate: true, // This will clear the QR code area behind the logo
       }
-    };
-
-    generateQRCode();
-  }, [url, colors, size, margin, errorCorrectionLevel, roundedCorners, centerImage, centerImageSize]);
-
-  if (!qrCodeDataUrl) {
-    return null;
-  }
+    : undefined;
 
   return (
-    <img
-      src={qrCodeDataUrl}
-      alt="QR Code"
-      width={width}
-      height={height}
-      className={className}
-      style={style}
-    />
+    <div style={{ width: width || size, height: height || size, ...style }} className={className}>
+      <QRCodeSVG
+        value={url}
+        size={size}
+        level={errorCorrectionLevel}
+        marginSize={margin}
+        fgColor={colors.dark || "#FFFFFF"}
+        bgColor={bgColor}
+        imageSettings={imageSettings}
+        style={{ width: "100%", height: "100%" }}
+      />
+    </div>
   );
 };
-
-// Re-export utility function for backward compatibility
-export { generateQRCodeDataUrl } from "../utils/qrGenerator";
 

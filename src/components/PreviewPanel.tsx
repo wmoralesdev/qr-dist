@@ -12,12 +12,16 @@ interface GeneratedCard {
 interface PreviewPanelProps {
   generatedCards: GeneratedCard[];
   backgroundImage: string;
+  qrColor: string;
+  brandingSvg: string | null;
   onDownloadCard: (card: GeneratedCard) => void;
 }
 
 export const PreviewPanel = ({
   generatedCards,
   backgroundImage,
+  qrColor,
+  brandingSvg,
   onDownloadCard,
 }: PreviewPanelProps) => {
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -83,10 +87,11 @@ export const PreviewPanel = ({
 
       <div className="flex-1 flex items-center justify-center overflow-y-auto">
         <BusinessCardPreview
-          qrCodeDataUrl={currentCard.qrCodeDataUrl}
+          url={currentCard.data.URL}
+          qrColor={qrColor}
+          brandingSvg={brandingSvg}
           backgroundImage={backgroundImage}
           name={currentCard.data.Name}
-          url={currentCard.data.URL}
           previewSize="large"
         />
       </div>

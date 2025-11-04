@@ -1,8 +1,9 @@
 import { useState, useRef } from "react";
+import ReactDOM from "react-dom/client";
+import { QRCodeSVG } from "qrcode.react";
 import { generateQRCodeDataUrl } from "./utils/qrGenerator";
 import type { BusinessCardData } from "./utils/csvParser";
 import { renderCardToCanvas, downloadCanvasAsPNG } from "./utils/cardRenderer";
-import { createZipFromDataUrls } from "./utils/zipGenerator";
 import { sanitizeFileName } from "./utils/imageUtils";
 import { ConfigurationPanel } from "./components/ConfigurationPanel";
 import { PreviewPanel } from "./components/PreviewPanel";
@@ -15,6 +16,7 @@ interface GeneratedCard {
 interface AppConfig {
   backgroundImage: string | null; // Data URL or path
   qrCodeColor: string; // Hex color
+  brandingSvg: string | null; // Data URL or path for branding SVG
   csvData: BusinessCardData[];
   generatedCards: GeneratedCard[];
 }
@@ -26,6 +28,7 @@ function App() {
   const [config, setConfig] = useState<AppConfig>({
     backgroundImage: null,
     qrCodeColor: DEFAULT_QR_COLOR,
+    brandingSvg: null,
     csvData: [],
     generatedCards: [],
   });
@@ -60,6 +63,13 @@ function App() {
     }));
   };
 
+  const handleBrandingSvgChange = (dataUrl: string | null) => {
+    setConfig((prev) => ({
+      ...prev,
+      brandingSvg: dataUrl,
+    }));
+  };
+
   const generateCards = async () => {
     if (config.csvData.length === 0) return;
 
@@ -74,7 +84,7 @@ function App() {
           margin: 2,
           errorCorrectionLevel: "H",
           roundedCorners: true,
-          centerImage: "/center.svg",
+          centerImage: config.brandingSvg ?? undefined,
           centerImageSize: 20,
         });
         cards.push({
@@ -113,7 +123,7 @@ function App() {
         backgroundColor: "#14120B",
       });
 
-      const fileName = `${sanitizeFileName(card.data.Name)}_business_card.png`;
+      const fileName = `001_${sanitizeFileName(card.data.Name)}_business_card.png`;
       downloadCanvasAsPNG(dataUrl, fileName);
     } catch (error) {
       console.error("Error downloading card:", error);
@@ -126,58 +136,201 @@ function App() {
   const downloadAllCards = async () => {
     if (config.generatedCards.length === 0) return;
 
+    // Check if File System Access API is available
+    const useFileSystemAPI = 'showDirectoryPicker' in window;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let dirHandle: any = null;
+
+    // Prompt user to select directory FIRST
+    if (useFileSystemAPI) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        dirHandle = await (window as any).showDirectoryPicker({
+          mode: 'readwrite',
+        });
+      } catch (error) {
+        console.error("Directory selection cancelled:", error);
+        return; // User cancelled
+      }
+    } else {
+      // Warn user about multiple downloads
+      const confirmed = confirm(
+        `Your browser doesn't support directory selection. ${config.generatedCards.length} files will be downloaded individually to your Downloads folder. Continue?`
+      );
+      if (!confirmed) return;
+    }
+
     setIsProcessing(true);
     setDownloadProgress(0);
 
     try {
-      const entries: Array<{ dataUrl: string; fileName: string }> = [];
+      let successCount = 0;
 
+      // Load background image once
+      const bgImage = new Image();
+      bgImage.crossOrigin = "anonymous";
+      await new Promise<void>((resolve, reject) => {
+        bgImage.onload = () => resolve();
+        bgImage.onerror = reject;
+        bgImage.src = backgroundImageUrl;
+      });
+
+      // Process and save each card one by one
       for (let i = 0; i < config.generatedCards.length; i++) {
         const card = config.generatedCards[i];
-        setCardToDownload(card);
 
-        // Update progress (80% for processing cards)
+        // Update progress
         const progress = Math.round(
-          ((i + 1) / config.generatedCards.length) * 80
+          ((i + 1) / config.generatedCards.length) * 100
         );
         setDownloadProgress(progress);
 
-        // Wait for React to update the DOM
-        await new Promise((resolve) => setTimeout(resolve, 200));
-
-        if (!hiddenCardRef.current) {
-          console.error("Hidden card element not found after rendering");
-          continue;
-        }
-
         try {
-          const dataUrl = await renderCardToCanvas(hiddenCardRef.current, {
-            width: 576,
-            height: 1008,
-            backgroundColor: "#14120B",
+          // Create a temporary container for rendering the QR code
+          const tempContainer = document.createElement("div");
+          tempContainer.style.position = "absolute";
+          tempContainer.style.left = "-9999px";
+          tempContainer.style.width = "400px";
+          tempContainer.style.height = "400px";
+          document.body.appendChild(tempContainer);
+
+          // Use React to render QR code into temp container
+          const imageSettings = config.brandingSvg
+            ? {
+                src: config.brandingSvg,
+                width: 80 * (38 / 44),
+                height: 80,
+                excavate: true,
+              }
+            : undefined;
+
+          const legacyRoot = ReactDOM.createRoot(tempContainer);
+          
+          await new Promise<void>((resolve) => {
+            legacyRoot.render(
+              <QRCodeSVG
+                value={card.data.URL}
+                size={400}
+                level="H"
+                marginSize={2}
+                fgColor={config.qrCodeColor}
+                bgColor="transparent"
+                imageSettings={imageSettings}
+              />
+            );
+            setTimeout(() => resolve(), 300);
           });
 
-          const fileName = `${sanitizeFileName(card.data.Name)}_business_card.png`;
-          entries.push({ dataUrl, fileName });
+          // Get the SVG element
+          const svgElement = tempContainer.querySelector("svg");
+          if (!svgElement) {
+            throw new Error("QR code SVG not found");
+          }
+
+          // Wait for any images inside the SVG to load (branding)
+          const images = svgElement.querySelectorAll("image");
+          if (images.length > 0) {
+            await Promise.all(
+              Array.from(images).map(() => {
+                return new Promise<void>((resolve) => {
+                  setTimeout(() => resolve(), 100);
+                });
+              })
+            );
+          }
+
+          // Convert SVG to data URL
+          const svgData = new XMLSerializer().serializeToString(svgElement);
+          const svgDataUrl = `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svgData)))}`;
+
+          // Load QR code image
+          const qrImage = new Image();
+          await new Promise<void>((resolve, reject) => {
+            qrImage.onload = () => resolve();
+            qrImage.onerror = reject;
+            qrImage.src = svgDataUrl;
+          });
+
+          // Create canvas and render card
+          const canvas = document.createElement("canvas");
+          canvas.width = 576;
+          canvas.height = 1008;
+          const ctx = canvas.getContext("2d");
+          
+          if (!ctx) {
+            throw new Error("Could not get canvas context");
+          }
+
+          // Draw background
+          ctx.fillStyle = "#14120B";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(bgImage, 0, 0, canvas.width, canvas.height);
+
+          // Draw QR code (centered)
+          const qrSize = 400;
+          const x = (canvas.width - qrSize) / 2;
+          const y = (canvas.height - qrSize) / 2;
+          ctx.drawImage(qrImage, x, y, qrSize, qrSize);
+
+          // Convert to data URL
+          const dataUrl = canvas.toDataURL("image/png", 1.0);
+          
+          if (dataUrl.length < 1000) {
+            throw new Error("Generated image is too small/empty");
+          }
+
+          const fileName = `${String(i + 1).padStart(3, '0')}_${sanitizeFileName(card.data.Name)}_business_card.png`;
+
+          // Save file immediately after generation
+          if (useFileSystemAPI && dirHandle) {
+            // Convert data URL to blob
+            const response = await fetch(dataUrl);
+            const blob = await response.blob();
+            
+            // Create file in the directory
+            const fileHandle = await dirHandle.getFileHandle(fileName, { create: true });
+            const writable = await fileHandle.createWritable();
+            await writable.write(blob);
+            await writable.close();
+            
+            console.log(`💾 Saved ${i + 1}/${config.generatedCards.length}: ${fileName} (${Math.round(dataUrl.length / 1024)}KB)`);
+          } else {
+            // Fallback: download using browser
+            const link = document.createElement('a');
+            link.href = dataUrl;
+            link.download = fileName;
+            link.click();
+            
+            console.log(`⬇️ Downloaded ${i + 1}/${config.generatedCards.length}: ${fileName} (${Math.round(dataUrl.length / 1024)}KB)`);
+            
+            // Small delay between downloads to avoid browser blocking
+            await new Promise(resolve => setTimeout(resolve, 150));
+          }
+
+          successCount++;
+
+          // Clean up temp container
+          legacyRoot.unmount();
+          document.body.removeChild(tempContainer);
         } catch (error) {
-          console.error(`Error processing card ${i + 1}:`, error);
+          console.error(`✗ Error processing card ${i + 1}:`, error);
         }
       }
 
-      // Update progress to 90% for ZIP generation
-      setDownloadProgress(90);
+      console.log(`\n✅ Complete: ${successCount}/${config.generatedCards.length} cards saved successfully`);
+      
+      if (successCount > 0) {
+        alert(`Successfully saved ${successCount} out of ${config.generatedCards.length} cards!`);
+      } else {
+        alert("No cards were generated. Please check the console for errors.");
+      }
 
-      // Generate and download the zip file
-      await createZipFromDataUrls(entries, "business_cards.zip");
-
-      // Update progress to 100%
       setDownloadProgress(100);
     } catch (error) {
       console.error("Error downloading cards:", error);
       alert("Error downloading cards");
     } finally {
       setIsProcessing(false);
-      setCardToDownload(null);
       setDownloadProgress(0);
     }
   };
@@ -190,6 +343,7 @@ function App() {
         csvData={config.csvData}
         backgroundImage={config.backgroundImage}
         qrCodeColor={config.qrCodeColor}
+        brandingSvg={config.brandingSvg}
         isGenerating={isGenerating}
         isProcessing={isProcessing}
         downloadProgress={downloadProgress}
@@ -197,6 +351,7 @@ function App() {
         onCSVUpload={handleCSVUpload}
         onBackgroundImageChange={handleBackgroundImageChange}
         onQRCodeColorChange={handleQRCodeColorChange}
+        onBrandingSvgChange={handleBrandingSvgChange}
         onGenerate={generateCards}
         onDownloadAll={downloadAllCards}
       />
@@ -204,6 +359,8 @@ function App() {
       <PreviewPanel
         generatedCards={config.generatedCards}
         backgroundImage={backgroundImageUrl}
+        qrColor={config.qrCodeColor}
+        brandingSvg={config.brandingSvg}
         onDownloadCard={downloadCard}
       />
 
@@ -229,16 +386,23 @@ function App() {
             boxSizing: "border-box",
           }}
         >
-          <img
-            src={cardToDownload.qrCodeDataUrl}
-            alt="QR Code"
-            style={{
-              width: "400px",
-              height: "400px",
-              backgroundColor: "transparent",
-              padding: "0px",
-              borderRadius: "0px",
-            }}
+          <QRCodeSVG
+            value={cardToDownload.data.URL}
+            size={400}
+            level="H"
+            marginSize={2}
+            fgColor={config.qrCodeColor}
+            bgColor="transparent"
+            imageSettings={
+              config.brandingSvg
+                ? {
+                    src: config.brandingSvg,
+                    width: 80 * (38 / 44), // Width scaled to maintain 38:44 aspect ratio
+                    height: 80, // Height at target size
+                    excavate: true,
+                  }
+                : undefined
+            }
           />
         </div>
       )}
@@ -247,3 +411,4 @@ function App() {
 }
 
 export default App;
+

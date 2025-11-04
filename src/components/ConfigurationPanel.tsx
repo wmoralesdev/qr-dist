@@ -7,6 +7,7 @@ interface ConfigurationPanelProps {
   csvData: BusinessCardData[];
   backgroundImage: string | null;
   qrCodeColor: string;
+  brandingSvg: string | null;
   isGenerating: boolean;
   isProcessing: boolean;
   downloadProgress: number;
@@ -14,6 +15,7 @@ interface ConfigurationPanelProps {
   onCSVUpload: (data: BusinessCardData[]) => void;
   onBackgroundImageChange: (dataUrl: string | null) => void;
   onQRCodeColorChange: (color: string) => void;
+  onBrandingSvgChange: (dataUrl: string | null) => void;
   onGenerate: () => void;
   onDownloadAll: () => void;
 }
@@ -22,6 +24,7 @@ export const ConfigurationPanel = ({
   csvData,
   backgroundImage,
   qrCodeColor,
+  brandingSvg,
   isGenerating,
   isProcessing,
   downloadProgress,
@@ -29,6 +32,7 @@ export const ConfigurationPanel = ({
   onCSVUpload,
   onBackgroundImageChange,
   onQRCodeColorChange,
+  onBrandingSvgChange,
   onGenerate,
   onDownloadAll,
 }: ConfigurationPanelProps) => {
@@ -96,6 +100,20 @@ export const ConfigurationPanel = ({
             label="QR Code Color"
             defaultColor="#F7F7F4"
           />
+        </section>
+
+        <section className="flex flex-col gap-4">
+          <h2 className="text-base font-semibold text-[#e0e0e0] m-0 pb-2 border-b border-[#404040]">Branding</h2>
+          <ImageUploader
+            value={brandingSvg}
+            onChange={onBrandingSvgChange}
+            label="Branding SVG (Optional)"
+            accept="image/svg+xml"
+            defaultImage={undefined}
+          />
+          <p className="text-xs text-[#a0a0a0] m-0 mt-[-8px]">
+            Upload a square SVG logo to be placed in the center of each QR code. Recommended size: 200x200px or similar.
+          </p>
         </section>
 
         <section className="flex flex-col gap-4">

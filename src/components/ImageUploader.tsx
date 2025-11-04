@@ -20,8 +20,11 @@ export const ImageUploader = ({
   const [isDragging, setIsDragging] = useState(false);
 
   const handleFileSelect = async (file: File) => {
-    if (!file.type.startsWith("image/")) {
-      alert("Please select an image file");
+    const isImage = file.type.startsWith("image/");
+    const isSvg = file.type === "image/svg+xml" || file.name.toLowerCase().endsWith(".svg");
+    
+    if (!isImage && !isSvg) {
+      alert("Please select an image or SVG file");
       return;
     }
 
@@ -30,7 +33,7 @@ export const ImageUploader = ({
       onChange(dataUrl);
     } catch (error) {
       console.error("Error reading file:", error);
-      alert("Error reading image file");
+      alert("Error reading file");
     }
   };
 
@@ -66,7 +69,7 @@ export const ImageUploader = ({
     }
   };
 
-  const displayImage = value || defaultImage;
+  const displayImage = value || (defaultImage ?? null);
 
   return (
     <div className="flex flex-col gap-3">
@@ -86,7 +89,7 @@ export const ImageUploader = ({
           />
         ) : (
           <div className="flex items-center justify-center text-[#a0a0a0] text-sm">
-            <span>Click or drag image here</span>
+            <span>{accept === "image/svg+xml" ? "Click or drag SVG here" : "Click or drag image here"}</span>
           </div>
         )}
       </div>
@@ -104,7 +107,7 @@ export const ImageUploader = ({
             className="flex-1 px-4 py-2.5 bg-[#404040] text-white border-none rounded-md text-sm font-medium cursor-pointer transition-colors hover:bg-[#525252]"
             onClick={handleClear}
           >
-            Reset to Default
+            {defaultImage ? "Reset to Default" : "Remove"}
           </button>
         )}
       </div>

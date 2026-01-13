@@ -22,7 +22,7 @@ interface AppConfig {
 }
 
 const DEFAULT_BACKGROUND = "/bn.png";
-const DEFAULT_QR_COLOR = "#F7F7F4";
+const DEFAULT_QR_COLOR = "#14120B";
 
 function App() {
   const [config, setConfig] = useState<AppConfig>({

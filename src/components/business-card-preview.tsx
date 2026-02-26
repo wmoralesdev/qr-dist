@@ -56,7 +56,6 @@ export const BusinessCardPreview = ({
           justifyContent: "center",
           padding: cardPadding,
           boxSizing: "border-box",
-          borderRadius: "24px",
           boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
         }}
       >
@@ -86,8 +85,8 @@ export const BusinessCardPreview = ({
       </div>
       {(name || url) && (
         <div className="text-center max-w-[480px]">
-          {name && <div className="text-base font-semibold text-[#e0e0e0] mb-1">{name}</div>}
-          {url && <div className="text-xs text-[#a0a0a0] break-all">{url}</div>}
+          {name && <div className="text-base font-semibold text-cursor-text mb-1">{name}</div>}
+          {url && <div className="text-xs text-cursor-muted break-all">{url}</div>}
         </div>
       )}
     </div>

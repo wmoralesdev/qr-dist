@@ -1,12 +1,18 @@
 import { useState, useRef } from "react";
 import ReactDOM from "react-dom/client";
 import { QRCodeSVG } from "qrcode.react";
-import { generateQRCodeDataUrl } from "./utils/qrGenerator";
-import type { BusinessCardData } from "./utils/csvParser";
-import { renderCardToCanvas, downloadCanvasAsPNG } from "./utils/cardRenderer";
-import { sanitizeFileName } from "./utils/imageUtils";
-import { ConfigurationPanel } from "./components/ConfigurationPanel";
-import { PreviewPanel } from "./components/PreviewPanel";
+import { generateQRCodeDataUrl } from "./utils/qr-generator";
+import type { BusinessCardData } from "./utils/csv-parser";
+import { renderCardToCanvas, downloadCanvasAsPNG } from "./utils/card-renderer";
+import { sanitizeFileName } from "./utils/image-utils";
+import { ConfigurationPanel } from "./components/configuration-panel";
+import { Navbar } from "./components/navbar";
+import { PreviewPanel } from "./components/preview-panel";
+import {
+  generateTabloidPdfs,
+  downloadBlob,
+} from "./utils/tabloid-pdf";
+import { computeTabloidLayout } from "./utils/tabloid-layout";
 
 interface GeneratedCard {
   data: BusinessCardData;
@@ -17,6 +23,8 @@ interface AppConfig {
   backgroundImage: string | null; // Data URL or path
   qrCodeColor: string; // Hex color
   brandingSvg: string | null; // Data URL or path for branding SVG
+  backSideImage: string | null; // Data URL for logo-like back image
+  backSideSizePercent: number; // size as % of card width
   csvData: BusinessCardData[];
   generatedCards: GeneratedCard[];
 }
@@ -29,6 +37,8 @@ function App() {
     backgroundImage: null,
     qrCodeColor: DEFAULT_QR_COLOR,
     brandingSvg: null,
+    backSideImage: null,
+    backSideSizePercent: 18,
     csvData: [],
     generatedCards: [],
   });
@@ -39,7 +49,12 @@ function App() {
   const [cardToDownload, setCardToDownload] = useState<GeneratedCard | null>(
     null
   );
+  const [isTabloidProcessing, setIsTabloidProcessing] = useState(false);
+  const [tabloidProgress, setTabloidProgress] = useState(0);
   const hiddenCardRef = useRef<HTMLDivElement>(null);
+
+  // Compute tabloid layout info
+  const tabloidLayout = computeTabloidLayout();
 
   const handleCSVUpload = (data: BusinessCardData[]) => {
     setConfig((prev) => ({
@@ -67,6 +82,20 @@ function App() {
     setConfig((prev) => ({
       ...prev,
       brandingSvg: dataUrl,
+    }));
+  };
+
+  const handleBackSideImageChange = (dataUrl: string | null) => {
+    setConfig((prev) => ({
+      ...prev,
+      backSideImage: dataUrl,
+    }));
+  };
+
+  const handleBackSideSizeChange = (percent: number) => {
+    setConfig((prev) => ({
+      ...prev,
+      backSideSizePercent: percent,
     }));
   };
 
@@ -335,25 +364,73 @@ function App() {
     }
   };
 
+  const downloadTabloidPdfs = async () => {
+    if (config.generatedCards.length === 0) return;
+
+    setIsTabloidProcessing(true);
+    setTabloidProgress(0);
+
+    try {
+      const urls = config.generatedCards.map((card) => card.data.URL);
+
+      const result = await generateTabloidPdfs({
+        brandingSvg: config.brandingSvg,
+        backgroundImage: backgroundImageUrl,
+        backSideImage: config.backSideImage,
+        backSideSizePercent: config.backSideSizePercent,
+        qrColor: config.qrCodeColor,
+        urls,
+        onProgress: (percent) => setTabloidProgress(percent),
+      });
+
+      // Download combined PDF (back page + QR front pages)
+      downloadBlob(result.combinedBlob, "tabloid-cards.pdf");
+
+      alert(
+        `Successfully generated tabloid PDF!\n` +
+          `- Total pages: ${result.pageCount}\n` +
+          `- Page 1: Back side (24 cards)\n` +
+          `- Pages 2-${result.pageCount}: QR fronts (${result.qrPageCount} pages)\n` +
+          `- ${result.slotsPerPage} cards per page`
+      );
+    } catch (error) {
+      console.error("Error generating tabloid PDFs:", error);
+      alert("Error generating tabloid PDFs. Check console for details.");
+    } finally {
+      setIsTabloidProcessing(false);
+      setTabloidProgress(0);
+    }
+  };
+
   const backgroundImageUrl = config.backgroundImage || DEFAULT_BACKGROUND;
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[#1a1a1a] text-[#e0e0e0] md:flex-row flex-col">
-      <ConfigurationPanel
+    <div className="flex flex-col h-screen overflow-hidden bg-cursor-bg text-cursor-text">
+      <Navbar />
+      <div className="flex flex-1 overflow-hidden md:flex-row flex-col">
+        <ConfigurationPanel
         csvData={config.csvData}
         backgroundImage={config.backgroundImage}
         qrCodeColor={config.qrCodeColor}
         brandingSvg={config.brandingSvg}
+        backSideImage={config.backSideImage}
+        backSideSizePercent={config.backSideSizePercent}
+        onBackSideImageChange={handleBackSideImageChange}
+        onBackSideSizeChange={handleBackSideSizeChange}
         isGenerating={isGenerating}
         isProcessing={isProcessing}
         downloadProgress={downloadProgress}
         generatedCardsCount={config.generatedCards.length}
+        slotsPerTabloid={tabloidLayout.slotsPerPage}
+        isTabloidProcessing={isTabloidProcessing}
+        tabloidProgress={tabloidProgress}
         onCSVUpload={handleCSVUpload}
         onBackgroundImageChange={handleBackgroundImageChange}
         onQRCodeColorChange={handleQRCodeColorChange}
         onBrandingSvgChange={handleBrandingSvgChange}
         onGenerate={generateCards}
         onDownloadAll={downloadAllCards}
+        onDownloadTabloid={downloadTabloidPdfs}
       />
 
       <PreviewPanel
@@ -361,8 +438,11 @@ function App() {
         backgroundImage={backgroundImageUrl}
         qrColor={config.qrCodeColor}
         brandingSvg={config.brandingSvg}
+        backSideImage={config.backSideImage}
+        backSideSizePercent={config.backSideSizePercent}
         onDownloadCard={downloadCard}
-      />
+        />
+      </div>
 
       {/* Hidden card for html2canvas */}
       {cardToDownload && (

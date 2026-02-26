@@ -1,7 +1,26 @@
 @import "tailwindcss";
+@import "@fontsource-variable/geist";
+
+@theme {
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --color-cursor-bg: #13120A;
+  --color-cursor-card: #1a1912;
+  --color-cursor-input: #222118;
+  --color-cursor-hover: #252419;
+  --color-cursor-text: #FFFFFF;
+  --color-cursor-muted: #B0B0B0;
+  --color-cursor-placeholder: #888888;
+  --color-cursor-accent: #FF4500;
+  --color-cursor-accent-hover: #E63D00;
+  --color-cursor-highlight: #00AAFF;
+  --color-cursor-border: #555555;
+  --color-cursor-disabled: #404040;
+  --color-cursor-disabled-text: #666666;
+}
 
 #root {
   width: 100%;
   height: 100vh;
   overflow: hidden;
+  font-family: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
 }

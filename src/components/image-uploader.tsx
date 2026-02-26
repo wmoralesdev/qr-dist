@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { fileToDataURL } from "../utils/imageUtils";
+import { fileToDataURL } from "../utils/image-utils";
 
 interface ImageUploaderProps {
   value: string | null;
@@ -73,9 +73,9 @@ export const ImageUploader = ({
 
   return (
     <div className="flex flex-col gap-3">
-      <label className="text-sm font-medium text-[#e0e0e0]">{label}</label>
+      <label className="text-sm font-medium text-cursor-text">{label}</label>
       <div
-        className={`w-full aspect-video border-2 border-dashed rounded-lg bg-[#2a2a2a] flex items-center justify-center cursor-pointer transition-all overflow-hidden ${isDragging ? "border-[#3b82f6] bg-[#333333]" : "border-[#404040]"} hover:border-[#3b82f6] hover:bg-[#333333]`}
+        className={`w-full aspect-video border-2 border-dashed bg-cursor-card flex items-center justify-center cursor-pointer transition-all overflow-hidden ${isDragging ? "border-cursor-highlight bg-cursor-input" : "border-cursor-border"} hover:border-cursor-highlight hover:bg-cursor-input`}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
@@ -88,7 +88,7 @@ export const ImageUploader = ({
             className="w-full h-full object-cover"
           />
         ) : (
-          <div className="flex items-center justify-center text-[#a0a0a0] text-sm">
+          <div className="flex items-center justify-center text-cursor-muted text-sm">
             <span>{accept === "image/svg+xml" ? "Click or drag SVG here" : "Click or drag image here"}</span>
           </div>
         )}
@@ -96,7 +96,7 @@ export const ImageUploader = ({
       <div className="flex gap-2">
         <button
           type="button"
-          className="flex-1 px-4 py-2.5 bg-[#3b82f6] text-white border-none rounded-md text-sm font-medium cursor-pointer transition-colors hover:bg-[#2563eb]"
+          className="flex-1 px-4 py-2.5 bg-cursor-accent text-white border-none text-sm font-medium cursor-pointer transition-colors hover:bg-cursor-accent-hover"
           onClick={() => fileInputRef.current?.click()}
         >
           {value ? "Change Image" : "Upload Image"}
@@ -104,7 +104,7 @@ export const ImageUploader = ({
         {value && (
           <button
             type="button"
-            className="flex-1 px-4 py-2.5 bg-[#404040] text-white border-none rounded-md text-sm font-medium cursor-pointer transition-colors hover:bg-[#525252]"
+            className="flex-1 px-4 py-2.5 bg-cursor-disabled text-white border-none text-sm font-medium cursor-pointer transition-colors hover:bg-cursor-hover"
             onClick={handleClear}
           >
             {defaultImage ? "Reset to Default" : "Remove"}

@@ -1,5 +1,5 @@
 import { QRCodeSVG } from "qrcode.react";
-import type { QRCodeColors } from "../utils/qrGenerator";
+import type { QRCodeColors } from "../utils/qr-generator";
 
 export type { QRCodeColors };
 

@@ -1,15 +1,23 @@
-import { useRef } from "react";
+import { useRef, type ReactNode } from "react";
+import { toast } from "sonner";
 import { parseCSV, type BusinessCardData } from "../utils/csv-parser";
+import type { CardOrientation } from "../utils/card-layout";
 import { ColorInput } from "./color-input";
 import { ImageUploader } from "./image-uploader";
 
 interface ConfigurationPanelProps {
   csvData: BusinessCardData[];
   backgroundImage: string | null;
+  /** Resolved front URL (includes default asset when front is empty) */
+  resolvedFrontBackgroundUrl: string;
+  backBackgroundImage: string | null;
+  backBackgroundSameAsFront: boolean;
   qrCodeColor: string;
   brandingSvg: string | null;
   backSideImage: string | null;
   backSideSizePercent: number;
+  cardOrientation: CardOrientation;
+  onCardOrientationChange: (orientation: CardOrientation) => void;
   onBackSideImageChange: (dataUrl: string | null) => void;
   onBackSideSizeChange: (percent: number) => void;
   isGenerating: boolean;
@@ -21,6 +29,8 @@ interface ConfigurationPanelProps {
   tabloidProgress: number;
   onCSVUpload: (data: BusinessCardData[]) => void;
   onBackgroundImageChange: (dataUrl: string | null) => void;
+  onBackBackgroundImageChange: (dataUrl: string | null) => void;
+  onBackBackgroundSameAsFrontChange: (sameAsFront: boolean) => void;
   onQRCodeColorChange: (color: string) => void;
   onBrandingSvgChange: (dataUrl: string | null) => void;
   onGenerate: () => void;
@@ -28,13 +38,44 @@ interface ConfigurationPanelProps {
   onDownloadTabloid: () => void;
 }
 
+function PanelGroup({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description?: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="border-b border-cursor-border pb-6 last:border-b-0">
+      <header className="mb-4">
+        <h2 className="m-0 text-base font-semibold text-balance text-cursor-text">
+          {title}
+        </h2>
+        {description ? (
+          <p className="mt-1 mb-0 text-pretty text-xs leading-relaxed text-cursor-muted">
+            {description}
+          </p>
+        ) : null}
+      </header>
+      <div className="flex flex-col gap-4">{children}</div>
+    </section>
+  );
+}
+
 export const ConfigurationPanel = ({
   csvData,
   backgroundImage,
+  resolvedFrontBackgroundUrl,
+  backBackgroundImage,
+  backBackgroundSameAsFront,
   qrCodeColor,
   brandingSvg,
   backSideImage,
   backSideSizePercent,
+  cardOrientation,
+  onCardOrientationChange,
   onBackSideImageChange,
   onBackSideSizeChange,
   isGenerating,
@@ -46,6 +87,8 @@ export const ConfigurationPanel = ({
   tabloidProgress,
   onCSVUpload,
   onBackgroundImageChange,
+  onBackBackgroundImageChange,
+  onBackBackgroundSameAsFrontChange,
   onQRCodeColorChange,
   onBrandingSvgChange,
   onGenerate,
@@ -67,25 +110,52 @@ export const ConfigurationPanel = ({
       })
       .catch((error) => {
         console.error("Error parsing CSV:", error);
-        alert("Error parsing CSV. Ensure your file has a URL column (required) and valid URLs.");
+        toast.error(
+          "Couldn’t read that CSV. Add a URL column (Name is optional)."
+        );
       });
   };
 
-  return (
-    <div className="flex flex-col h-full min-h-0 bg-cursor-card overflow-y-auto p-6 flex-[0_0_40%] min-w-[400px] max-w-[500px] md:flex-[0_0_40%]">
-      <div className="mb-8">
-        <h1 className="text-2xl font-bold text-cursor-text m-0 mb-2">Business Card Generator</h1>
-        <p className="text-sm text-cursor-muted m-0">
-          Upload a CSV with a <strong className="text-cursor-text">URL</strong> column (required) and optional <strong className="text-cursor-text">Name</strong> column. Each URL becomes a scannable QR code.
-        </p>
-      </div>
+  const tabloidPages =
+    generatedCardsCount > 0
+      ? Math.ceil(generatedCardsCount / slotsPerTabloid)
+      : 0;
 
-      <div className="flex flex-col gap-8">
-        <section className="flex flex-col gap-4">
-          <h2 className="text-base font-semibold text-cursor-text m-0 pb-2 border-b border-cursor-border">CSV File</h2>
-          <p className="text-xs text-cursor-muted m-0 mb-1">
-            Required: <code className="px-1 py-0.5 bg-cursor-input text-cursor-text">URL</code>. Optional: <code className="px-1 py-0.5 bg-cursor-input text-cursor-text">Name</code>
-          </p>
+  const orientationBtn = (o: CardOrientation, label: string) => {
+    const on = cardOrientation === o;
+    return (
+      <button
+        key={o}
+        type="button"
+        className={`flex-1 cursor-pointer border px-3 py-2.5 text-sm font-medium transition-colors ${
+          on
+            ? "border-cursor-accent bg-cursor-accent text-white"
+            : "border-cursor-border bg-cursor-input text-cursor-muted hover:border-cursor-accent/50 hover:text-cursor-text"
+        }`}
+        onClick={() => onCardOrientationChange(o)}
+      >
+        {label}
+      </button>
+    );
+  };
+
+  return (
+    <div className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-y-auto overflow-x-hidden bg-cursor-card p-5">
+      <header className="mb-5 shrink-0 border-b border-cursor-border pb-4">
+        <h1 className="m-0 text-xl font-bold text-balance text-cursor-text">
+          Business cards
+        </h1>
+        <p className="mt-2 mb-0 text-pretty text-sm leading-relaxed text-cursor-muted">
+          Add your list, tweak the layout, then export PNGs or a print-ready
+          tabloid PDF.
+        </p>
+      </header>
+
+      <div className="flex flex-col pb-2">
+        <PanelGroup
+          title="1 · Your list"
+          description="CSV with a URL column for each QR code. Optional Name column for filenames."
+        >
           <input
             ref={fileInputRef}
             type="file"
@@ -95,145 +165,267 @@ export const ConfigurationPanel = ({
           />
           <button
             type="button"
-            className="w-full px-6 py-3 border-none text-sm font-medium cursor-pointer transition-colors bg-cursor-accent text-white hover:bg-cursor-accent-hover"
+            className="w-full cursor-pointer border-none bg-cursor-accent px-4 py-3 text-sm font-medium text-white transition-colors hover:bg-cursor-accent-hover"
             onClick={() => fileInputRef.current?.click()}
           >
-            Upload CSV File
+            Choose CSV…
           </button>
-          {csvData.length > 0 && (
-            <p className="text-sm text-cursor-muted m-0">
-              Loaded {csvData.length} entries (URLs ready for QR codes)
+          {csvData.length > 0 ? (
+            <p className="m-0 text-sm tabular-nums text-cursor-text">
+              <span className="font-medium">{csvData.length}</span> rows loaded
+              — previews update automatically.
+            </p>
+          ) : (
+            <p className="m-0 text-xs text-cursor-muted">
+              No file yet. Exported cards use each row’s URL as the QR target.
             </p>
           )}
-        </section>
+        </PanelGroup>
 
-        <section className="flex flex-col gap-4">
-          <h2 className="text-base font-semibold text-cursor-text m-0 pb-2 border-b border-cursor-border">Card Design</h2>
-          <ImageUploader
-            value={backgroundImage}
-            onChange={onBackgroundImageChange}
-            label="Background Image"
-            defaultImage="/bn.png"
-          />
+        <PanelGroup
+          title="2 · Card layout"
+          description="Backgrounds apply to the physical front and back. Orientation matches exports and the tabloid sheet."
+        >
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 sm:items-stretch">
+            <div className="flex min-h-[288px] flex-col justify-between gap-3">
+              <div className="shrink-0">
+                <div className="text-sm font-medium text-cursor-text">Front</div>
+                <p className="mt-0.5 mb-0 text-pretty text-xs text-cursor-muted">
+                  QR side
+                </p>
+              </div>
+              <ImageUploader
+                value={backgroundImage}
+                onChange={onBackgroundImageChange}
+                label="Front"
+                accessibilityLabel="Front background"
+                hideLabel
+                compact
+              />
+            </div>
+            <div className="flex min-h-[288px] flex-col justify-between gap-3">
+              <div className="shrink-0 flex flex-col gap-2">
+                <div className="text-sm font-medium text-cursor-text">Back</div>
+                <label className="flex cursor-pointer items-start gap-2.5">
+                  <input
+                    type="checkbox"
+                    checked={backBackgroundSameAsFront}
+                    onChange={(e) =>
+                      onBackBackgroundSameAsFrontChange(e.target.checked)
+                    }
+                    className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-cursor-accent"
+                  />
+                  <span className="text-sm leading-snug text-cursor-text">
+                    Use same as front
+                  </span>
+                </label>
+                {backBackgroundSameAsFront ? (
+                  <p className="mb-0 text-pretty text-xs text-cursor-muted">
+                    Back uses the front background.
+                  </p>
+                ) : (
+                  <div>
+                    <div className="text-sm font-medium text-cursor-text">
+                      Custom image
+                    </div>
+                    <p className="mt-0.5 mb-0 text-pretty text-xs text-cursor-muted">
+                      Leave empty for a solid back (no image).
+                    </p>
+                  </div>
+                )}
+              </div>
+              {backBackgroundSameAsFront ? (
+                <div className="flex shrink-0 flex-col gap-2">
+                  <div
+                    className="aspect-[8/5] max-h-[112px] min-h-[88px] w-full cursor-default overflow-hidden border-2 border-dashed border-cursor-border bg-cursor-input/50"
+                    aria-hidden
+                  >
+                    <img
+                      src={resolvedFrontBackgroundUrl}
+                      alt=""
+                      className="h-full w-full object-cover"
+                    />
+                  </div>
+                  {/* Match compact ImageUploader button row height so drop zones line up */}
+                  <div className="min-h-[42px] shrink-0" aria-hidden />
+                </div>
+              ) : (
+                <ImageUploader
+                  value={backBackgroundImage}
+                  onChange={onBackBackgroundImageChange}
+                  label="Back background"
+                  accessibilityLabel="Back background"
+                  hideLabel
+                  compact
+                  useDefaultWhenEmpty={false}
+                />
+              )}
+            </div>
+          </div>
+
+          <div>
+            <span className="text-sm font-medium text-cursor-text">
+              Orientation
+            </span>
+            <div className="mt-2 flex gap-2">
+              {orientationBtn("vertical", "Portrait")}
+              {orientationBtn("horizontal", "Landscape")}
+            </div>
+          </div>
+
           <ColorInput
             value={qrCodeColor}
             onChange={onQRCodeColorChange}
-            label="QR Code Color"
+            label="QR & cut lines"
             defaultColor="#F7F7F4"
+            hint="Used for the QR modules and tabloid cut guides."
           />
-          <p className="text-xs text-cursor-muted m-0 -mt-2">
-            Also used for cutting lines on the tabloid PDF.
-          </p>
-        </section>
+        </PanelGroup>
 
-        <section className="flex flex-col gap-4">
-          <h2 className="text-base font-semibold text-cursor-text m-0 pb-2 border-b border-cursor-border">Branding</h2>
+        <PanelGroup
+          title="3 · QR center (optional)"
+          description="Square SVG sits in the middle of each code (high error correction)."
+        >
           <ImageUploader
             value={brandingSvg}
             onChange={onBrandingSvgChange}
-            label="Branding SVG (Optional)"
+            label="Logo"
             accept="image/svg+xml"
-            defaultImage={undefined}
+            compact
+            useDefaultWhenEmpty={false}
+            hint="SVG recommended (~200×200)."
           />
-          <p className="text-xs text-cursor-muted m-0 mt-[-8px]">
-            Upload a square SVG logo. It will be placed in the center of each QR code. Recommended size: 200×200px or similar.
-          </p>
-        </section>
+        </PanelGroup>
 
-        <section className="flex flex-col gap-4">
-          <h2 className="text-base font-semibold text-cursor-text m-0 pb-2 border-b border-cursor-border">Tabloid Back Side</h2>
-          <ImageUploader
-            value={backSideImage}
-            onChange={onBackSideImageChange}
-            label="Back logo (tabloid only)"
-            accept="image/*"
-            defaultImage={undefined}
-          />
-          <p className="text-xs text-cursor-muted m-0 mt-[-8px]">
-            Logo-like image centered on the back. Falls back to branding SVG if empty.
-          </p>
-          <div className="flex flex-col gap-2">
-            <label className="text-sm font-medium text-cursor-text">Back logo size (%)</label>
-            <input
-              type="number"
-              min={5}
-              max={50}
-              value={backSideSizePercent}
-              onChange={(e) => onBackSideSizeChange?.(Math.min(50, Math.max(5, Number(e.target.value) || 18)))}
-              className="px-3 py-2.5 bg-cursor-input border border-cursor-border text-sm text-cursor-text focus:outline-none focus:border-cursor-highlight"
+        <section className="border-b border-cursor-border pb-6 last:border-b-0">
+          <details className="group">
+            <summary className="cursor-pointer list-none marker:hidden [&::-webkit-details-marker]:hidden">
+              <span className="flex items-baseline justify-between gap-2">
+                <span className="text-base font-semibold text-cursor-text">
+                  Tabloid back (print sheet)
+                </span>
+                <span className="shrink-0 text-xs font-normal text-cursor-muted">
+                  Optional
+                </span>
+              </span>
+            </summary>
+            <div className="mt-4 flex flex-col gap-4">
+            <p className="m-0 text-xs text-pretty text-cursor-muted">
+              First PDF page repeats this logo on every back slot; QR fronts
+              follow. If empty, your branding SVG is used.
+            </p>
+            <ImageUploader
+              value={backSideImage}
+              onChange={onBackSideImageChange}
+              label="Back-of-sheet logo"
+              accept="image/*"
+              compact
+              useDefaultWhenEmpty={false}
             />
+            <div className="flex flex-col gap-2">
+              <label className="text-sm font-medium text-cursor-text">
+                Logo size on card (% width)
+              </label>
+              <input
+                type="number"
+                min={5}
+                max={50}
+                value={backSideSizePercent}
+                onChange={(e) =>
+                  onBackSideSizeChange?.(
+                    Math.min(50, Math.max(5, Number(e.target.value) || 18))
+                  )
+                }
+                className="w-full border border-cursor-border bg-cursor-input px-3 py-2.5 text-sm tabular-nums text-cursor-text focus:border-cursor-accent focus:outline-none"
+              />
+            </div>
           </div>
+        </details>
         </section>
 
-        <section className="flex flex-col gap-4">
-          <h2 className="text-base font-semibold text-cursor-text m-0 pb-2 border-b border-cursor-border">Actions</h2>
+        <PanelGroup
+          title="Export"
+          description={
+            generatedCardsCount > 0
+              ? "Refresh QR bitmaps after you change color or logo."
+              : "Generate previews by loading a CSV, then download here."
+          }
+        >
           <button
             type="button"
-            className="w-full px-6 py-3 border-none text-sm font-medium cursor-pointer transition-colors bg-cursor-accent text-white hover:bg-cursor-accent-hover disabled:bg-cursor-disabled disabled:text-cursor-disabled-text disabled:cursor-not-allowed"
+            className="w-full cursor-pointer border border-cursor-border bg-transparent px-4 py-2.5 text-sm font-medium text-cursor-text transition-colors hover:bg-cursor-hover disabled:cursor-not-allowed disabled:opacity-50"
             onClick={onGenerate}
             disabled={isGenerating || csvData.length === 0}
           >
-            {isGenerating ? "Generating QR Codes..." : "Generate Business Cards"}
+            {csvData.length === 0
+              ? "Load a CSV first"
+              : isGenerating
+                ? "Refreshing…"
+                : generatedCardsCount > 0
+                  ? "Refresh all QR images"
+                  : "Build QR previews"}
           </button>
 
-          {generatedCardsCount > 0 && (
-            <div className="p-3 bg-cursor-input border border-cursor-border">
-              <p className="text-sm text-cursor-text m-0 font-medium">
-                {generatedCardsCount} card{generatedCardsCount !== 1 ? "s" : ""} generated
+          {generatedCardsCount > 0 ? (
+            <div className="flex flex-col gap-3 border-t border-cursor-border pt-3">
+              <p className="m-0 text-sm font-medium tabular-nums text-cursor-text">
+                {generatedCardsCount} card
+                {generatedCardsCount !== 1 ? "s" : ""} ready
               </p>
-            </div>
-          )}
-
-          {generatedCardsCount > 0 && (
-            <>
               <button
                 type="button"
-                className="w-full px-6 py-3 border-none text-sm font-medium cursor-pointer transition-colors bg-cursor-accent text-white hover:bg-cursor-accent-hover disabled:bg-cursor-disabled disabled:text-cursor-disabled-text disabled:cursor-not-allowed"
+                className="w-full cursor-pointer border-none bg-cursor-accent px-4 py-3 text-sm font-medium text-white transition-colors hover:bg-cursor-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
                 onClick={onDownloadAll}
                 disabled={isProcessing || isTabloidProcessing}
               >
-                {isProcessing ? "Downloading..." : "Download All Cards"}
+                {isProcessing ? "Saving…" : "Download all as PNG"}
               </button>
-              {isProcessing && (
-                <div className="flex flex-col gap-2">
-                  <div className="w-full h-2 bg-cursor-disabled overflow-hidden">
+              {isProcessing ? (
+                <div className="flex flex-col gap-1.5">
+                  <div className="h-1.5 overflow-hidden bg-cursor-disabled">
                     <div
                       className="h-full bg-cursor-accent transition-all duration-300"
                       style={{ width: `${downloadProgress}%` }}
                     />
                   </div>
-                  <div className="text-xs text-cursor-muted text-center">{downloadProgress}% complete</div>
+                  <p className="m-0 text-center text-xs tabular-nums text-cursor-muted">
+                    {downloadProgress}%
+                  </p>
                 </div>
-              )}
+              ) : null}
 
-              {/* Tabloid PDF section */}
-              <div className="mt-4 pt-4 border-t border-cursor-border">
-                <p className="text-xs text-cursor-muted m-0 mb-2">
-                  Tabloid: 11×17" page, {slotsPerTabloid} cards per page (~3.67×2.125" each). {Math.ceil(generatedCardsCount / slotsPerTabloid)} QR page{Math.ceil(generatedCardsCount / slotsPerTabloid) !== 1 ? "s" : ""} needed.
+              <div className="flex flex-col gap-2">
+                <p className="m-0 text-xs text-pretty text-cursor-muted">
+                  11×17″ tabloid · {slotsPerTabloid} per page
+                  {tabloidPages > 0
+                    ? ` · ${tabloidPages} QR page${tabloidPages !== 1 ? "s" : ""}`
+                    : ""}
                 </p>
                 <button
                   type="button"
-                  className="w-full px-6 py-3 border-none text-sm font-medium cursor-pointer transition-colors bg-cursor-highlight text-white hover:opacity-90 disabled:bg-cursor-disabled disabled:text-cursor-disabled-text disabled:cursor-not-allowed"
+                  className="w-full cursor-pointer border border-cursor-accent bg-transparent px-4 py-2.5 text-sm font-medium text-cursor-accent transition-colors hover:bg-cursor-accent/10 disabled:cursor-not-allowed disabled:opacity-50"
                   onClick={onDownloadTabloid}
                   disabled={isProcessing || isTabloidProcessing}
                 >
-                  {isTabloidProcessing ? "Generating PDFs..." : "Download Tabloid PDFs"}
+                  {isTabloidProcessing ? "Building PDF…" : "Download tabloid PDF"}
                 </button>
-                {isTabloidProcessing && (
-                  <div className="flex flex-col gap-2 mt-2">
-                    <div className="w-full h-2 bg-cursor-disabled overflow-hidden">
+                {isTabloidProcessing ? (
+                  <div className="flex flex-col gap-1.5">
+                    <div className="h-1.5 overflow-hidden bg-cursor-disabled">
                       <div
-                        className="h-full bg-cursor-highlight transition-all duration-300"
+                        className="h-full bg-cursor-accent transition-all duration-300"
                         style={{ width: `${tabloidProgress}%` }}
                       />
                     </div>
-                    <div className="text-xs text-cursor-muted text-center">{tabloidProgress}% complete</div>
+                    <p className="m-0 text-center text-xs tabular-nums text-cursor-muted">
+                      {tabloidProgress}%
+                    </p>
                   </div>
-                )}
+                ) : null}
               </div>
-            </>
-          )}
-        </section>
+            </div>
+          ) : null}
+        </PanelGroup>
       </div>
     </div>
   );

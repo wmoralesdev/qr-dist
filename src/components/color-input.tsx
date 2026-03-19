@@ -6,6 +6,7 @@ interface ColorInputProps {
   onChange: (color: string) => void;
   label: string;
   defaultColor?: string;
+  hint?: string;
 }
 
 export const ColorInput = ({
@@ -13,6 +14,7 @@ export const ColorInput = ({
   onChange,
   label,
   defaultColor = "#F7F7F4",
+  hint,
 }: ColorInputProps) => {
   const [localValue, setLocalValue] = useState(value);
   const [error, setError] = useState<string>("");
@@ -42,7 +44,12 @@ export const ColorInput = ({
 
   return (
     <div className="flex flex-col gap-2">
-      <label className="text-sm font-medium text-cursor-text">{label}</label>
+      <div>
+        <label className="text-sm font-medium text-cursor-text">{label}</label>
+        {hint ? (
+          <p className="mt-0.5 text-xs text-cursor-muted text-pretty m-0">{hint}</p>
+        ) : null}
+      </div>
       <div className="flex items-center gap-3">
         <input
           type="text"
@@ -50,7 +57,7 @@ export const ColorInput = ({
           onChange={handleChange}
           onBlur={handleBlur}
           placeholder={defaultColor}
-          className={`flex-1 px-3 py-2.5 bg-cursor-input border text-sm text-cursor-text font-mono focus:outline-none focus:border-cursor-highlight ${error ? "border-red-500" : "border-cursor-border"}`}
+          className={`flex-1 px-3 py-2.5 bg-cursor-input border text-sm text-cursor-text font-mono tabular-nums focus:outline-none focus:border-cursor-accent ${error ? "border-red-500" : "border-cursor-border"}`}
         />
         <div
           className="w-10 h-10 border border-cursor-border flex-shrink-0"

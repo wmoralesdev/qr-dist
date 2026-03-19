@@ -24,3 +24,14 @@
   overflow: hidden;
   font-family: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
 }
+
+/* Sonner — match app chrome (Toaster uses data-theme="dark") */
+[data-sonner-toaster][data-theme="dark"] {
+  --normal-bg: var(--color-cursor-card);
+  --normal-border: var(--color-cursor-border);
+  --normal-text: var(--color-cursor-text);
+  --success-bg: var(--color-cursor-card);
+  --success-border: var(--color-cursor-border);
+  --error-bg: var(--color-cursor-card);
+  --error-border: var(--color-cursor-accent);
+}

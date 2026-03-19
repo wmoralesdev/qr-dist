@@ -23,3 +23,6 @@ dist-ssr
 *.sln
 *.sw?
 .vercel
+
+# Entrypoint is lowercase src/app.tsx (main.tsx → ./app). Ignore PascalCase duplicate on case-sensitive OSes.
+src/App.tsx

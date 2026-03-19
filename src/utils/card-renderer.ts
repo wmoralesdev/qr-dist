@@ -1,59 +1,110 @@
-import html2canvas from "html2canvas";
+import type { ExportLayoutMetrics } from "./card-layout";
+import { svgToPngDataUrl } from "./svg-to-png";
 
-export interface CardRenderOptions {
-  width?: number;
-  height?: number;
+/**
+ * Supersampling factor for PNG export. Export composites the **background** and **rasterized QR**
+ * on a canvas with high-quality smoothing so the card art resamples cleanly; the QR path matches
+ * single-card and bulk download.
+ */
+export const CARD_HTML_CAPTURE_SCALE = 2;
+
+export interface CardCompositeRenderOptions {
+  backgroundImage: string;
+  qrCodeDataUrl: string;
+  metrics: ExportLayoutMetrics;
   backgroundColor?: string;
   scale?: number;
 }
 
-const DEFAULT_OPTIONS: CardRenderOptions = {
-  width: 576, // 6in at 96 DPI
-  height: 1008, // 10.5in at 96 DPI
-  scale: 1,
-  backgroundColor: "#14120B",
-};
-
-export const renderCardToCanvas = async (
-  element: HTMLElement,
-  options?: CardRenderOptions
-): Promise<string> => {
-  const opts = { ...DEFAULT_OPTIONS, ...options };
-
-  // Wait for React to update the DOM and ensure the element is rendered
-  await new Promise((resolve) => setTimeout(resolve, 200));
-
-  // Preload any background images to ensure they're ready
-  const bgImage = window.getComputedStyle(element).backgroundImage;
-  if (bgImage && bgImage !== "none") {
-    const urlMatch = bgImage.match(/url\(["']?([^"')]+)["']?\)/);
-    if (urlMatch && urlMatch[1]) {
-      await new Promise((resolve) => {
-        const img = new Image();
-        img.onload = () => resolve(undefined);
-        img.onerror = () => resolve(undefined); // Continue even if image fails to load
-        img.src = urlMatch[1];
-      });
+function loadImage(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    // data: / blob: must not use crossOrigin — browsers often fail the load (breaks SVG QR export).
+    if (
+      src.startsWith("http://") ||
+      src.startsWith("https://") ||
+      src.startsWith("/")
+    ) {
+      img.crossOrigin = "anonymous";
     }
+    img.onload = () => resolve(img);
+    img.onerror = () =>
+      reject(new Error(`Failed to load image: ${src.slice(0, 80)}`));
+    img.src = src;
+  });
+}
+
+/**
+ * `generateQRCodeDataUrl` returns a utf-8 SVG data URL; many browsers won't use that as `<img>.src`
+ * for canvas compositing — rasterize for the pipeline, not because the QR “lost quality”.
+ */
+function isSvgQrSource(qrCodeDataUrl: string): boolean {
+  const s = qrCodeDataUrl.trimStart();
+  return (
+    s.startsWith("data:image/svg+xml") ||
+    s.startsWith("<svg") ||
+    s.startsWith("<?xml")
+  );
+}
+
+async function loadQrImageForComposite(
+  qrCodeDataUrl: string,
+  qrSizeCssPx: number,
+  scale: number
+): Promise<HTMLImageElement> {
+  const pixelSize = Math.max(1, Math.round(qrSizeCssPx * scale));
+  if (isSvgQrSource(qrCodeDataUrl)) {
+    const pngDataUrl = await svgToPngDataUrl(qrCodeDataUrl, {
+      width: pixelSize,
+      height: pixelSize,
+    });
+    return loadImage(pngDataUrl);
+  }
+  return loadImage(qrCodeDataUrl);
+}
+
+/**
+ * Single-card export: draw the **full-resolution background** once with high-quality smoothing, then
+ * the QR on top. Avoids re-rasterizing the whole card (where the BG/art looked worst).
+ */
+export const renderCardCompositeToPng = async (
+  options: CardCompositeRenderOptions
+): Promise<string> => {
+  const {
+    backgroundImage,
+    qrCodeDataUrl,
+    metrics,
+    backgroundColor = "#14120B",
+    scale = CARD_HTML_CAPTURE_SCALE,
+  } = options;
+
+  const [bgImage, qrImage] = await Promise.all([
+    loadImage(backgroundImage),
+    loadQrImageForComposite(qrCodeDataUrl, metrics.qr.size, scale),
+  ]);
+
+  const canvas = document.createElement("canvas");
+  canvas.width = metrics.cardWidth * scale;
+  canvas.height = metrics.cardHeight * scale;
+
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    throw new Error("Could not get canvas context");
   }
 
-  // Additional wait to ensure background image is applied
-  await new Promise((resolve) => setTimeout(resolve, 100));
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.setTransform(scale, 0, 0, scale, 0, 0);
+  ctx.fillStyle = backgroundColor;
+  ctx.fillRect(0, 0, metrics.cardWidth, metrics.cardHeight);
+  ctx.drawImage(bgImage, 0, 0, metrics.cardWidth, metrics.cardHeight);
 
-  const canvas = await html2canvas(element, {
-    width: opts.width,
-    height: opts.height,
-    scale: opts.scale,
-    useCORS: true,
-    allowTaint: true,
-    backgroundColor: opts.backgroundColor,
-    logging: false,
-    imageTimeout: 5000,
-    removeContainer: false,
-    foreignObjectRendering: false,
-  });
+  const drawX = metrics.padding + metrics.qr.left;
+  const drawY = metrics.padding + metrics.qr.top;
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(qrImage, drawX, drawY, metrics.qr.size, metrics.qr.size);
 
-  const dataUrl = canvas.toDataURL("image/png", 1.0); // Highest quality
+  const dataUrl = canvas.toDataURL("image/png", 1.0);
 
   if (dataUrl.length < 1000) {
     throw new Error("Generated image is empty");
@@ -71,4 +122,3 @@ export const downloadCanvasAsPNG = (
   link.href = dataUrl;
   link.click();
 };
-

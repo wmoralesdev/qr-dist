@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { toast } from "sonner";
 import { fileToDataURL } from "../utils/image-utils";
 
 interface ImageUploaderProps {
@@ -6,15 +7,30 @@ interface ImageUploaderProps {
   onChange: (dataUrl: string | null) => void;
   label: string;
   defaultImage?: string;
+  /** When false and value is empty, do not show defaultImage in the preview slot */
+  useDefaultWhenEmpty?: boolean;
   accept?: string;
+  /** Muted helper under the label */
+  hint?: string;
+  /** Smaller drop zone for dense panels */
+  compact?: boolean;
+  /** Omit title + hint (e.g. when the parent renders them above a justify-between column) */
+  hideLabel?: boolean;
+  /** Used for `aria-label` on the drop zone when `hideLabel` is true */
+  accessibilityLabel?: string;
 }
 
 export const ImageUploader = ({
   value,
   onChange,
   label,
-  defaultImage = "/bn.png",
+  defaultImage,
+  useDefaultWhenEmpty = true,
   accept = "image/*",
+  hint,
+  compact = false,
+  hideLabel = false,
+  accessibilityLabel,
 }: ImageUploaderProps) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -24,7 +40,7 @@ export const ImageUploader = ({
     const isSvg = file.type === "image/svg+xml" || file.name.toLowerCase().endsWith(".svg");
     
     if (!isImage && !isSvg) {
-      alert("Please select an image or SVG file");
+      toast.error("Choose an image or SVG file.");
       return;
     }
 
@@ -33,7 +49,7 @@ export const ImageUploader = ({
       onChange(dataUrl);
     } catch (error) {
       console.error("Error reading file:", error);
-      alert("Error reading file");
+      toast.error("Couldn’t read that file.");
     }
   };
 
@@ -69,45 +85,78 @@ export const ImageUploader = ({
     }
   };
 
-  const displayImage = value || (defaultImage ?? null);
+  const defaultForDisplay =
+    defaultImage !== undefined && defaultImage !== ""
+      ? defaultImage
+      : "/bn.png";
+  const displayImage =
+    value ?? (useDefaultWhenEmpty ? defaultForDisplay : null);
+
+  const dropClass = compact
+    ? "aspect-[8/5] max-h-[112px] min-h-[88px]"
+    : "aspect-video";
+
+  const dropAriaLabel = `${accessibilityLabel ?? label}: choose file`;
 
   return (
-    <div className="flex flex-col gap-3">
-      <label className="text-sm font-medium text-cursor-text">{label}</label>
+    <div className="flex flex-col gap-2">
+      {!hideLabel ? (
+        <div>
+          <label className="text-sm font-medium text-cursor-text">{label}</label>
+          {hint ? (
+            <p className="mt-0.5 text-xs text-cursor-muted text-pretty m-0">
+              {hint}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
       <div
-        className={`w-full aspect-video border-2 border-dashed bg-cursor-card flex items-center justify-center cursor-pointer transition-all overflow-hidden ${isDragging ? "border-cursor-highlight bg-cursor-input" : "border-cursor-border"} hover:border-cursor-highlight hover:bg-cursor-input`}
+        className={`flex w-full cursor-pointer items-center justify-center overflow-hidden border-2 border-dashed bg-cursor-input/50 transition-colors ${dropClass} ${isDragging ? "border-cursor-accent bg-cursor-input" : "border-cursor-border hover:border-cursor-accent/70 hover:bg-cursor-input"}`}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
         onClick={() => fileInputRef.current?.click()}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            fileInputRef.current?.click();
+          }
+        }}
+        role="button"
+        tabIndex={0}
+        aria-label={dropAriaLabel}
       >
         {displayImage ? (
           <img
             src={displayImage}
-            alt="Preview"
-            className="w-full h-full object-cover"
+            alt=""
+            className="h-full w-full object-cover"
           />
         ) : (
-          <div className="flex items-center justify-center text-cursor-muted text-sm">
-            <span>{accept === "image/svg+xml" ? "Click or drag SVG here" : "Click or drag image here"}</span>
+          <div className="px-2 text-center text-xs text-cursor-muted">
+            <span>
+              {accept === "image/svg+xml"
+                ? "Drop SVG or click"
+                : "Drop image or click"}
+            </span>
           </div>
         )}
       </div>
-      <div className="flex gap-2">
+      <div className={`flex gap-2 ${compact ? "" : ""}`}>
         <button
           type="button"
-          className="flex-1 px-4 py-2.5 bg-cursor-accent text-white border-none text-sm font-medium cursor-pointer transition-colors hover:bg-cursor-accent-hover"
+          className={`flex-1 cursor-pointer border-none bg-cursor-accent text-sm font-medium text-white transition-colors hover:bg-cursor-accent-hover ${compact ? "px-3 py-2" : "px-4 py-2.5"}`}
           onClick={() => fileInputRef.current?.click()}
         >
-          {value ? "Change Image" : "Upload Image"}
+          {value ? "Replace" : "Choose file"}
         </button>
         {value && (
           <button
             type="button"
-            className="flex-1 px-4 py-2.5 bg-cursor-disabled text-white border-none text-sm font-medium cursor-pointer transition-colors hover:bg-cursor-hover"
+            className={`flex-1 cursor-pointer border border-cursor-border bg-transparent text-sm font-medium text-cursor-text transition-colors hover:border-cursor-muted hover:bg-cursor-hover ${compact ? "px-3 py-2" : "px-4 py-2.5"}`}
             onClick={handleClear}
           >
-            {defaultImage ? "Reset to Default" : "Remove"}
+            {useDefaultWhenEmpty ? "Reset" : "Clear"}
           </button>
         )}
       </div>

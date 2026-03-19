@@ -1,11 +1,17 @@
+import type { CardOrientation } from "../utils/card-layout";
+import { getPreviewCardPixelSize } from "../utils/card-layout";
+
 const DEFAULT_LOGO_PATH = "/logo.svg";
+const EMPTY_BACK_FILL = "#14120B";
 
 interface BackCardPreviewProps {
-  backgroundImage: string;
+  /** When null, a solid fill is used (matches PDF export for empty back). */
+  backgroundImage: string | null;
   backImage: string | null; // data URL or path for logo-like image
   brandingSvg: string | null; // fallback when backImage is empty
   sizePercent: number;
   previewSize?: "small" | "large";
+  orientation?: CardOrientation;
 }
 
 export const BackCardPreview = ({
@@ -14,9 +20,13 @@ export const BackCardPreview = ({
   brandingSvg,
   sizePercent,
   previewSize = "large",
+  orientation = "vertical",
 }: BackCardPreviewProps) => {
-  const cardWidth = previewSize === "large" ? 480 : 240;
-  const cardHeight = previewSize === "large" ? 840 : 420;
+  const { width: cardWidth, height: cardHeight } = getPreviewCardPixelSize(
+    orientation,
+    previewSize
+  );
+  // Match tabloid: % of full card width
   const overlaySize = Math.round(cardWidth * (sizePercent / 100));
   const src = backImage || brandingSvg || DEFAULT_LOGO_PATH;
 
@@ -28,15 +38,21 @@ export const BackCardPreview = ({
         style={{
           width: `${cardWidth}px`,
           height: `${cardHeight}px`,
-          backgroundImage: `url(${backgroundImage})`,
-          backgroundSize: "cover",
-          backgroundPosition: "center",
-          backgroundRepeat: "no-repeat",
+          ...(backgroundImage
+            ? {
+                backgroundImage: `url(${backgroundImage})`,
+                backgroundSize: "cover",
+                backgroundPosition: "center",
+                backgroundRepeat: "no-repeat",
+              }
+            : { backgroundColor: EMPTY_BACK_FILL }),
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
           boxSizing: "border-box",
           boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
+          outline: "1px solid rgba(255,255,255,0.18)",
+          outlineOffset: "0px",
         }}
       >
         <img

@@ -4,7 +4,7 @@
  * - tabloid-qr-front.pdf: N pages with unique QR codes matching the same slot layout
  */
 
-import { jsPDF } from "jspdf";
+import type { jsPDF } from "jspdf";
 import {
   computeTabloidLayout,
   computePageCount,
@@ -13,10 +13,47 @@ import {
 } from "./tabloid-layout";
 import { svgToPngDataUrl } from "./svg-to-png";
 import { generateQRCodeDataUrl } from "./qr-generator";
+import type { CardOrientation, FrontCardLayout } from "./card-layout";
+import {
+  DEFAULT_FRONT_CARD_LAYOUT,
+  getContentPaddingPx,
+  layoutToQrPixels,
+} from "./card-layout";
 
 const DPI = 300; // print resolution (300 DPI for high quality printing)
 const BACK_DPI = 600; // higher DPI for back side image to preserve logo quality
 const DEFAULT_LOGO_PATH = "/logo.svg";
+/** Concurrent QR→PNG→composite pipelines (bounded to limit peak memory). */
+const QR_CARD_CONCURRENCY = 8;
+
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  mapper: (item: T, index: number) => Promise<R>,
+  onProgress?: (completed: number, total: number) => void
+): Promise<R[]> {
+  if (items.length === 0) return [];
+  const results: R[] = [];
+  results.length = items.length;
+  let nextIndex = 0;
+  let completed = 0;
+  const total = items.length;
+  const workerCount = Math.max(1, Math.min(limit, total));
+
+  async function worker(): Promise<void> {
+    while (true) {
+      const i = nextIndex;
+      nextIndex += 1;
+      if (i >= total) return;
+      results[i] = await mapper(items[i], i);
+      completed += 1;
+      onProgress?.(completed, total);
+    }
+  }
+
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return results;
+}
 
 /**
  * Load an image (PNG/JPG/etc) and return as data URL at specified dimensions.
@@ -42,15 +79,19 @@ async function loadImageAsDataUrl(
       if (rotate90CCW) {
         canvas.width = height;
         canvas.height = width;
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
         ctx.translate(0, width);
         ctx.rotate(-Math.PI / 2);
         ctx.drawImage(img, 0, 0, width, height);
       } else {
         canvas.width = width;
         canvas.height = height;
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = "high";
         ctx.drawImage(img, 0, 0, width, height);
       }
-      resolve(canvas.toDataURL("image/png"));
+      resolve(canvas.toDataURL("image/png", 1.0));
     };
     img.onerror = () => reject(new Error(`Failed to load image: ${src.slice(0, 50)}`));
     img.src = src;
@@ -58,9 +99,8 @@ async function loadImageAsDataUrl(
 }
 
 /**
- * Load an image and composite a centered overlay on top, then optionally rotate 90° CCW.
- * Used for rendering card background + QR/logo as a single rotated image.
- * Preserves overlay aspect ratio when overlayWidth/overlayHeight differ.
+ * Load an image and composite an overlay at (overlayLeft, overlayTop) in card space,
+ * then optionally rotate 90° CCW for portrait cards placed in landscape slots.
  */
 async function compositeCardImage(
   bgSrc: string,
@@ -69,7 +109,9 @@ async function compositeCardImage(
   cardHeightPx: number,
   overlayWidth: number,
   overlayHeight: number,
-  rotate90CCW = true
+  overlayLeft: number,
+  overlayTop: number,
+  rotate90CCW: boolean
 ): Promise<string> {
   const [bgImg, overlayImg] = await Promise.all([
     loadImage(bgSrc),
@@ -95,11 +137,25 @@ async function compositeCardImage(
   }
 
   ctx.drawImage(bgImg, 0, 0, cardWidthPx, cardHeightPx);
-  const ox = (cardWidthPx - overlayWidth) / 2;
-  const oy = (cardHeightPx - overlayHeight) / 2;
-  ctx.drawImage(overlayImg, ox, oy, overlayWidth, overlayHeight);
+  ctx.drawImage(overlayImg, overlayLeft, overlayTop, overlayWidth, overlayHeight);
 
-  return canvas.toDataURL("image/png");
+  return canvas.toDataURL("image/png", 1.0);
+}
+
+function tabloidCardPixels(
+  orientation: CardOrientation,
+  dpi: number
+): { width: number; height: number } {
+  if (orientation === "vertical") {
+    return {
+      width: Math.round(2 * dpi),
+      height: Math.round(3.5 * dpi),
+    };
+  }
+  return {
+    width: Math.round(3.5 * dpi),
+    height: Math.round(2 * dpi),
+  };
 }
 
 function loadImage(src: string): Promise<HTMLImageElement> {
@@ -138,12 +194,17 @@ function fitToSize(
 
 export interface TabloidPdfOptions {
   brandingSvg: string | null; // data URL or path
-  backgroundImage: string; // data URL or path for card background
+  /** Front (QR) face background */
+  backgroundImage: string;
+  /** Back face background; pass resolved URL (front, custom art, or solid fill) */
+  backBackgroundImage?: string;
   backSideImage: string | null; // data URL for logo-like image centered on back
   backSideSizePercent?: number; // size as % of card width (default 18)
   qrColor: string;
   urls: string[]; // one URL per card
   onProgress?: (percent: number) => void;
+  /** Shared with PNG export / preview */
+  frontCardLayout?: FrontCardLayout;
 }
 
 export interface TabloidPdfResult {
@@ -155,13 +216,25 @@ export interface TabloidPdfResult {
 
 /**
  * Build both PDFs and return their Blobs.
- * Cards are rendered at original portrait dimensions (2" × 3.5") then rotated 90° CCW
- * to fit into landscape slots (3.5" × 2") on the tabloid page.
+ * Vertical cards are rendered at 2" × 3.5" then rotated 90° CCW into landscape slots.
+ * Horizontal cards are rendered at 3.5" × 2" without rotation.
  */
 export async function generateTabloidPdfs(
   options: TabloidPdfOptions
 ): Promise<TabloidPdfResult> {
-  const { brandingSvg, backgroundImage, backSideImage, backSideSizePercent = 18, qrColor, urls, onProgress } = options;
+  const {
+    brandingSvg,
+    backgroundImage,
+    backBackgroundImage,
+    backSideImage,
+    backSideSizePercent = 18,
+    qrColor,
+    urls,
+    onProgress,
+    frontCardLayout = DEFAULT_FRONT_CARD_LAYOUT,
+  } = options;
+
+  const backBgSrc = backBackgroundImage ?? backgroundImage;
 
   const layout = computeTabloidLayout();
   const { slotsPerPage, slots } = layout;
@@ -169,19 +242,28 @@ export async function generateTabloidPdfs(
 
   const brandingSource = brandingSvg || DEFAULT_LOGO_PATH;
 
-  // Original card dimensions (portrait) at 300 DPI - these get rotated into landscape slots
-  const originalCardWidthIn = 2;
-  const originalCardHeightIn = 3.5;
-  const cardWidthPx = Math.round(originalCardWidthIn * DPI);   // 600px
-  const cardHeightPx = Math.round(originalCardHeightIn * DPI); // 1050px
+  const { width: cardWidthPx, height: cardHeightPx } = tabloidCardPixels(
+    frontCardLayout.orientation,
+    DPI
+  );
+  const rotateForSlot = frontCardLayout.orientation === "vertical";
 
-  // Prepare background image at original portrait dimensions
-  const bgPng = await loadImageAsDataUrl(backgroundImage, cardWidthPx, cardHeightPx);
+  // Prepare background at print card dimensions
+  const bgPng = await loadImageAsDataUrl(
+    backgroundImage,
+    cardWidthPx,
+    cardHeightPx
+  );
 
-  // Back-side card uses higher DPI for better logo quality
-  const backCardWidthPx = Math.round(originalCardWidthIn * BACK_DPI);
-  const backCardHeightPx = Math.round(originalCardHeightIn * BACK_DPI);
-  const bgPngHighRes = await loadImageAsDataUrl(backgroundImage, backCardWidthPx, backCardHeightPx);
+  const { width: backCardWidthPx, height: backCardHeightPx } = tabloidCardPixels(
+    frontCardLayout.orientation,
+    BACK_DPI
+  );
+  const bgPngHighRes = await loadImageAsDataUrl(
+    backBgSrc,
+    backCardWidthPx,
+    backCardHeightPx
+  );
 
   // Back-side card for logo-back PDF: composite (bg + centered logo/back image)
   // Use backCardWidthPx as reference (percentage of card width as labeled in UI)
@@ -192,6 +274,8 @@ export async function generateTabloidPdfs(
     const naturalDims = await getImageDimensions(backSideImage);
     const scaledDims = fitToSize(naturalDims.width, naturalDims.height, backLogoMaxSize);
     // Use the original image directly (don't resize through loadImageAsDataUrl to preserve quality)
+    const ox = (backCardWidthPx - scaledDims.width) / 2;
+    const oy = (backCardHeightPx - scaledDims.height) / 2;
     logoCardPng = await compositeCardImage(
       bgPngHighRes,
       backSideImage, // Use original data URL directly
@@ -199,7 +283,9 @@ export async function generateTabloidPdfs(
       backCardHeightPx,
       scaledDims.width,
       scaledDims.height,
-      true
+      ox,
+      oy,
+      rotateForSlot
     );
   } else {
     const logoPng = await svgToPngDataUrl(brandingSource, {
@@ -207,6 +293,8 @@ export async function generateTabloidPdfs(
       height: backLogoMaxSize,
       backgroundColor: undefined,
     });
+    const ox = (backCardWidthPx - backLogoMaxSize) / 2;
+    const oy = (backCardHeightPx - backLogoMaxSize) / 2;
     logoCardPng = await compositeCardImage(
       bgPngHighRes,
       logoPng,
@@ -214,46 +302,62 @@ export async function generateTabloidPdfs(
       backCardHeightPx,
       backLogoMaxSize,
       backLogoMaxSize,
-      true
+      ox,
+      oy,
+      rotateForSlot
     );
   }
 
-  // Generate all QR card images (background + centered QR, rotated 90° CCW)
-  const qrCardPngs: string[] = [];
-  const qrSizePx = Math.round(cardWidthPx * 0.85);
+  const padPx = getContentPaddingPx(cardWidthPx);
+  const contentW = cardWidthPx - 2 * padPx;
+  const contentH = cardHeightPx - 2 * padPx;
+  const qrRect = layoutToQrPixels(frontCardLayout.qr, contentW, contentH);
+  const qrRasterSize = Math.max(1, Math.round(qrRect.size));
 
-  for (let i = 0; i < urls.length; i++) {
-    const qrSvgDataUrl = await generateQRCodeDataUrl(urls[i], {
-      colors: { dark: qrColor, light: "transparent" },
-      size: 400,
-      margin: 2,
-      errorCorrectionLevel: "H",
-    });
+  const qrCardPngs = await mapWithConcurrency(
+    urls,
+    QR_CARD_CONCURRENCY,
+    async (url) => {
+      const qrSvgDataUrl = await generateQRCodeDataUrl(url, {
+        colors: { dark: qrColor, light: "transparent" },
+        size: 400,
+        margin: 2,
+        errorCorrectionLevel: "H",
+      });
 
-    const qrPng = await svgToPngDataUrl(qrSvgDataUrl, {
-      width: qrSizePx,
-      height: qrSizePx,
-      backgroundColor: undefined,
-    });
+      const qrPng = await svgToPngDataUrl(qrSvgDataUrl, {
+        width: qrRasterSize,
+        height: qrRasterSize,
+        backgroundColor: undefined,
+      });
 
-    const qrCardPng = await compositeCardImage(
-      bgPng,
-      qrPng,
-      cardWidthPx,
-      cardHeightPx,
-      qrSizePx,
-      qrSizePx, // QR codes are square
-      true
-    );
-    qrCardPngs.push(qrCardPng);
-
-    if (onProgress) {
-      onProgress(Math.round(((i + 1) / urls.length) * 50));
+      return compositeCardImage(
+        bgPng,
+        qrPng,
+        cardWidthPx,
+        cardHeightPx,
+        qrRasterSize,
+        qrRasterSize,
+        padPx + qrRect.left,
+        padPx + qrRect.top,
+        rotateForSlot
+      );
+    },
+    (completed, total) => {
+      if (onProgress) {
+        onProgress(Math.round((completed / total) * 50));
+      }
     }
-  }
+  );
+
+  const { jsPDF } = await import("jspdf");
 
   // Build combined PDF: first page is logo-back, remaining pages are QR fronts
-  const combinedPdf = createPdf();
+  const combinedPdf = new jsPDF({
+    orientation: "portrait",
+    unit: "in",
+    format: [11, 17],
+  });
 
   // Page 1: Logo-back (24 copies of back image)
   for (const slot of slots) {
@@ -291,15 +395,6 @@ export async function generateTabloidPdfs(
     qrPageCount: pageCount,
     slotsPerPage,
   };
-}
-
-function createPdf(): jsPDF {
-  // Page dimensions: 11x17 tabloid portrait
-  return new jsPDF({
-    orientation: "portrait",
-    unit: "in",
-    format: [11, 17],
-  });
 }
 
 /**
@@ -354,7 +449,8 @@ function drawSlotImage(
   imageDataUrl: string,
   slot: SlotRect
 ): void {
-  pdf.addImage(imageDataUrl, "JPEG", slot.x, slot.y, slot.width, slot.height);
+  // PNG keeps card art lossless; JPEG was washing out colors on dark backgrounds.
+  pdf.addImage(imageDataUrl, "PNG", slot.x, slot.y, slot.width, slot.height);
 }
 
 /**

@@ -2,9 +2,9 @@ import type { ExportLayoutMetrics } from "./card-layout";
 import { svgToPngDataUrl } from "./svg-to-png";
 
 /**
- * Supersampling factor for PNG export. Export composites the **background** and **rasterized QR**
- * on a canvas with high-quality smoothing so the card art resamples cleanly; the QR path matches
- * single-card and bulk download.
+ * Supersampling factor for PNG export. The noticeable “soft” export vs browser was mostly the
+ * **background card image** (and any typography baked into it) being resampled by html2canvas;
+ * the on-screen QR is vector SVG and did not drive that perception.
  */
 export const CARD_HTML_CAPTURE_SCALE = 2;
 

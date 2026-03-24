@@ -17,7 +17,7 @@ export interface FrontCardLayout {
   qr: FrontCardQrLayout;
 }
 
-/** Default QR placement (vertical). Percentages are relative to the padded content box. */
+/** Matches legacy centered QR on vertical 480×840 with 48px padding (inner 384×744). */
 export const DEFAULT_FRONT_CARD_LAYOUT: FrontCardLayout = {
   orientation: "vertical",
   qr: {
@@ -54,7 +54,6 @@ export function getPreviewCardPixelSize(
     ? { width: 840, height: 480 }
     : { width: 420, height: 240 };
 }
-
 
 export interface QrPixelRect {
   left: number;

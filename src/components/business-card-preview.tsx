@@ -54,7 +54,7 @@ export const BusinessCardPreview = ({
       ? { width: exportWidth, height: exportHeight }
       : getPreviewCardPixelSize(layout.orientation, previewSize);
 
-  /** Same fraction of card width as export (`getExportLayoutMetrics`) so WYSIWYG. */
+  /** Same rule as export (`getExportLayoutMetrics`) so WYSIWYG drag preview. */
   const padPx = getContentPaddingPx(cardDims.width);
 
   const contentW = cardDims.width - 2 * padPx;

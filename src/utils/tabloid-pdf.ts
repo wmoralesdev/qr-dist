@@ -4,7 +4,7 @@
  * - tabloid-qr-front.pdf: N pages with unique QR codes matching the same slot layout
  */
 
-import type { jsPDF } from "jspdf";
+import { jsPDF } from "jspdf";
 import {
   computeTabloidLayout,
   computePageCount,
@@ -23,37 +23,6 @@ import {
 const DPI = 300; // print resolution (300 DPI for high quality printing)
 const BACK_DPI = 600; // higher DPI for back side image to preserve logo quality
 const DEFAULT_LOGO_PATH = "/logo.svg";
-/** Concurrent QR→PNG→composite pipelines (bounded to limit peak memory). */
-const QR_CARD_CONCURRENCY = 8;
-
-async function mapWithConcurrency<T, R>(
-  items: readonly T[],
-  limit: number,
-  mapper: (item: T, index: number) => Promise<R>,
-  onProgress?: (completed: number, total: number) => void
-): Promise<R[]> {
-  if (items.length === 0) return [];
-  const results: R[] = [];
-  results.length = items.length;
-  let nextIndex = 0;
-  let completed = 0;
-  const total = items.length;
-  const workerCount = Math.max(1, Math.min(limit, total));
-
-  async function worker(): Promise<void> {
-    while (true) {
-      const i = nextIndex;
-      nextIndex += 1;
-      if (i >= total) return;
-      results[i] = await mapper(items[i], i);
-      completed += 1;
-      onProgress?.(completed, total);
-    }
-  }
-
-  await Promise.all(Array.from({ length: workerCount }, () => worker()));
-  return results;
-}
 
 /**
  * Load an image (PNG/JPG/etc) and return as data URL at specified dimensions.
@@ -308,56 +277,47 @@ export async function generateTabloidPdfs(
     );
   }
 
+  const qrCardPngs: string[] = [];
   const padPx = getContentPaddingPx(cardWidthPx);
   const contentW = cardWidthPx - 2 * padPx;
   const contentH = cardHeightPx - 2 * padPx;
   const qrRect = layoutToQrPixels(frontCardLayout.qr, contentW, contentH);
   const qrRasterSize = Math.max(1, Math.round(qrRect.size));
 
-  const qrCardPngs = await mapWithConcurrency(
-    urls,
-    QR_CARD_CONCURRENCY,
-    async (url) => {
-      const qrSvgDataUrl = await generateQRCodeDataUrl(url, {
-        colors: { dark: qrColor, light: "transparent" },
-        size: 400,
-        margin: 2,
-        errorCorrectionLevel: "H",
-      });
+  for (let i = 0; i < urls.length; i++) {
+    const qrSvgDataUrl = await generateQRCodeDataUrl(urls[i], {
+      colors: { dark: qrColor, light: "transparent" },
+      size: 400,
+      margin: 2,
+      errorCorrectionLevel: "H",
+    });
 
-      const qrPng = await svgToPngDataUrl(qrSvgDataUrl, {
-        width: qrRasterSize,
-        height: qrRasterSize,
-        backgroundColor: undefined,
-      });
+    const qrPng = await svgToPngDataUrl(qrSvgDataUrl, {
+      width: qrRasterSize,
+      height: qrRasterSize,
+      backgroundColor: undefined,
+    });
 
-      return compositeCardImage(
-        bgPng,
-        qrPng,
-        cardWidthPx,
-        cardHeightPx,
-        qrRasterSize,
-        qrRasterSize,
-        padPx + qrRect.left,
-        padPx + qrRect.top,
-        rotateForSlot
-      );
-    },
-    (completed, total) => {
-      if (onProgress) {
-        onProgress(Math.round((completed / total) * 50));
-      }
+    const qrCardPng = await compositeCardImage(
+      bgPng,
+      qrPng,
+      cardWidthPx,
+      cardHeightPx,
+      qrRasterSize,
+      qrRasterSize,
+      padPx + qrRect.left,
+      padPx + qrRect.top,
+      rotateForSlot
+    );
+    qrCardPngs.push(qrCardPng);
+
+    if (onProgress) {
+      onProgress(Math.round(((i + 1) / urls.length) * 50));
     }
-  );
-
-  const { jsPDF } = await import("jspdf");
+  }
 
   // Build combined PDF: first page is logo-back, remaining pages are QR fronts
-  const combinedPdf = new jsPDF({
-    orientation: "portrait",
-    unit: "in",
-    format: [11, 17],
-  });
+  const combinedPdf = createPdf();
 
   // Page 1: Logo-back (24 copies of back image)
   for (const slot of slots) {
@@ -395,6 +355,15 @@ export async function generateTabloidPdfs(
     qrPageCount: pageCount,
     slotsPerPage,
   };
+}
+
+function createPdf(): jsPDF {
+  // Page dimensions: 11x17 tabloid portrait
+  return new jsPDF({
+    orientation: "portrait",
+    unit: "in",
+    format: [11, 17],
+  });
 }
 
 /**

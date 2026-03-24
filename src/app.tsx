@@ -1,10 +1,16 @@
-import { useState, useRef } from "react";
-import ReactDOM from "react-dom/client";
-import { QRCodeSVG } from "qrcode.react";
+import { startTransition, useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import { generateQRCodeDataUrl } from "./utils/qr-generator";
 import type { BusinessCardData } from "./utils/csv-parser";
-import { renderCardToCanvas, downloadCanvasAsPNG } from "./utils/card-renderer";
-import { sanitizeFileName } from "./utils/image-utils";
+import {
+  renderCardCompositeToPng,
+  downloadCanvasAsPNG,
+  CARD_HTML_CAPTURE_SCALE,
+} from "./utils/card-renderer";
+import {
+  createSolidColorDataUrl,
+  sanitizeFileName,
+} from "./utils/image-utils";
 import { ConfigurationPanel } from "./components/configuration-panel";
 import { Navbar } from "./components/navbar";
 import { PreviewPanel } from "./components/preview-panel";
@@ -13,54 +19,140 @@ import {
   downloadBlob,
 } from "./utils/tabloid-pdf";
 import { computeTabloidLayout } from "./utils/tabloid-layout";
+import type {
+  CardOrientation,
+  FrontCardLayout,
+  FrontCardQrLayout,
+} from "./utils/card-layout";
+import {
+  DEFAULT_FRONT_CARD_LAYOUT,
+  clampFrontCardQrLayout,
+  getContentPaddingPx,
+  getExportLayoutMetrics,
+  getPreviewCardPixelSize,
+  remapQrLayoutForOrientation,
+} from "./utils/card-layout";
 
 interface GeneratedCard {
   data: BusinessCardData;
   qrCodeDataUrl: string;
 }
 
+const EMPTY_BACK_COLOR = "#14120B";
+
 interface AppConfig {
-  backgroundImage: string | null; // Data URL or path
-  qrCodeColor: string; // Hex color
-  brandingSvg: string | null; // Data URL or path for branding SVG
-  backSideImage: string | null; // Data URL for logo-like back image
-  backSideSizePercent: number; // size as % of card width
+  backgroundImage: string | null;
+  backBackgroundImage: string | null;
+  backBackgroundSameAsFront: boolean;
+  qrCodeColor: string;
+  brandingSvg: string | null;
+  backSideImage: string | null;
+  backSideSizePercent: number;
   csvData: BusinessCardData[];
   generatedCards: GeneratedCard[];
+  frontCardLayout: FrontCardLayout;
 }
 
 const DEFAULT_BACKGROUND = "/bn.png";
 const DEFAULT_QR_COLOR = "#14120B";
 
+async function buildGeneratedCardsFromRows(
+  rows: BusinessCardData[],
+  qrCodeColor: string,
+  brandingSvg: string | null
+): Promise<GeneratedCard[]> {
+  const opts = {
+    colors: { dark: qrCodeColor, light: "none" as const },
+    size: 400,
+    margin: 2,
+    errorCorrectionLevel: "H" as const,
+    roundedCorners: true,
+    centerImage: brandingSvg ?? undefined,
+    centerImageSize: 20,
+  };
+  const qrCodeDataUrls = await Promise.all(
+    rows.map((data) => generateQRCodeDataUrl(data.URL, opts))
+  );
+  return rows.map((data, i) => ({
+    data,
+    qrCodeDataUrl: qrCodeDataUrls[i],
+  }));
+}
+
 function App() {
   const [config, setConfig] = useState<AppConfig>({
     backgroundImage: null,
+    backBackgroundImage: null,
+    backBackgroundSameAsFront: false,
     qrCodeColor: DEFAULT_QR_COLOR,
     brandingSvg: null,
     backSideImage: null,
     backSideSizePercent: 18,
     csvData: [],
     generatedCards: [],
+    frontCardLayout: DEFAULT_FRONT_CARD_LAYOUT,
   });
 
   const [isGenerating, setIsGenerating] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
-  const [cardToDownload, setCardToDownload] = useState<GeneratedCard | null>(
-    null
-  );
   const [isTabloidProcessing, setIsTabloidProcessing] = useState(false);
   const [tabloidProgress, setTabloidProgress] = useState(0);
-  const hiddenCardRef = useRef<HTMLDivElement>(null);
 
-  // Compute tabloid layout info
+  const qrStyleRef = useRef({
+    qrCodeColor: config.qrCodeColor,
+    brandingSvg: config.brandingSvg,
+  });
+  qrStyleRef.current = {
+    qrCodeColor: config.qrCodeColor,
+    brandingSvg: config.brandingSvg,
+  };
+
   const tabloidLayout = computeTabloidLayout();
+
+  useEffect(() => {
+    if (config.csvData.length === 0) return;
+
+    let cancelled = false;
+    const rows = config.csvData;
+    const { qrCodeColor, brandingSvg } = qrStyleRef.current;
+
+    void (async () => {
+      setIsGenerating(true);
+      try {
+        const cards = await buildGeneratedCardsFromRows(
+          rows,
+          qrCodeColor,
+          brandingSvg
+        );
+        if (!cancelled) {
+          setConfig((prev) => ({
+            ...prev,
+            generatedCards: cards,
+          }));
+        }
+      } catch (error) {
+        if (!cancelled) {
+          console.error("Error generating QR codes:", error);
+          toast.error("Couldn’t generate QR codes. Check your URLs.");
+        }
+      } finally {
+        if (!cancelled) {
+          setIsGenerating(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [config.csvData]);
 
   const handleCSVUpload = (data: BusinessCardData[]) => {
     setConfig((prev) => ({
       ...prev,
       csvData: data,
-      generatedCards: [], // Clear generated cards when new CSV is uploaded
+      generatedCards: [],
     }));
   };
 
@@ -68,6 +160,22 @@ function App() {
     setConfig((prev) => ({
       ...prev,
       backgroundImage: dataUrl,
+    }));
+  };
+
+  const handleBackBackgroundImageChange = (dataUrl: string | null) => {
+    setConfig((prev) => ({
+      ...prev,
+      backBackgroundImage: dataUrl,
+      ...(dataUrl ? { backBackgroundSameAsFront: false } : {}),
+    }));
+  };
+
+  const handleBackBackgroundSameAsFrontChange = (sameAsFront: boolean) => {
+    setConfig((prev) => ({
+      ...prev,
+      backBackgroundSameAsFront: sameAsFront,
+      ...(sameAsFront ? { backBackgroundImage: null } : {}),
     }));
   };
 
@@ -99,90 +207,114 @@ function App() {
     }));
   };
 
+  const handleCardOrientationChange = (orientation: CardOrientation) => {
+    setConfig((prev) => {
+      if (prev.frontCardLayout.orientation === orientation) return prev;
+      const nextQr = remapQrLayoutForOrientation(
+        prev.frontCardLayout.qr,
+        prev.frontCardLayout.orientation,
+        orientation,
+        "large"
+      );
+      return {
+        ...prev,
+        frontCardLayout: { orientation, qr: nextQr },
+      };
+    });
+  };
+
+  const handleFrontQrLayoutChange = (qr: FrontCardQrLayout) => {
+    setConfig((prev) => {
+      const { width, height } = getPreviewCardPixelSize(
+        prev.frontCardLayout.orientation,
+        "large"
+      );
+      const pad = getContentPaddingPx(width);
+      const contentW = width - 2 * pad;
+      const contentH = height - 2 * pad;
+      const clamped = clampFrontCardQrLayout(qr, contentW, contentH);
+      return {
+        ...prev,
+        frontCardLayout: { ...prev.frontCardLayout, qr: clamped },
+      };
+    });
+  };
+
   const generateCards = async () => {
     if (config.csvData.length === 0) return;
 
     setIsGenerating(true);
-    const cards: GeneratedCard[] = [];
-
     try {
-      for (const data of config.csvData) {
-        const qrCodeDataUrl = await generateQRCodeDataUrl(data.URL, {
-          colors: { dark: config.qrCodeColor, light: "none" },
-          size: 400,
-          margin: 2,
-          errorCorrectionLevel: "H",
-          roundedCorners: true,
-          centerImage: config.brandingSvg ?? undefined,
-          centerImageSize: 20,
-        });
-        cards.push({
-          data,
-          qrCodeDataUrl,
-        });
-      }
+      const cards = await buildGeneratedCardsFromRows(
+        config.csvData,
+        config.qrCodeColor,
+        config.brandingSvg
+      );
       setConfig((prev) => ({
         ...prev,
         generatedCards: cards,
       }));
+      toast.success(
+        cards.length === 1
+          ? "QR image updated"
+          : `${cards.length} QR images updated`
+      );
     } catch (error) {
       console.error("Error generating cards:", error);
-      alert("Error generating QR codes. Please check your URLs.");
+      toast.error("Couldn’t generate QR codes. Check your URLs.");
     } finally {
       setIsGenerating(false);
     }
   };
 
+  const exportMetrics = getExportLayoutMetrics(config.frontCardLayout);
+
   const downloadCard = async (card: GeneratedCard) => {
-    setCardToDownload(card);
-
-    // Wait for React to update the DOM
-    await new Promise((resolve) => setTimeout(resolve, 200));
-
-    if (!hiddenCardRef.current) {
-      console.error("Hidden card element not found after rendering");
-      setCardToDownload(null);
-      return;
-    }
-
     try {
-      const dataUrl = await renderCardToCanvas(hiddenCardRef.current, {
-        width: 576,
-        height: 1008,
+      const qrCodeDataUrlFresh = await generateQRCodeDataUrl(card.data.URL, {
+        colors: { dark: config.qrCodeColor, light: "none" },
+        size: 400,
+        margin: 2,
+        errorCorrectionLevel: "H",
+        roundedCorners: true,
+        centerImage: config.brandingSvg ?? undefined,
+        centerImageSize: 20,
+      });
+
+      const dataUrl = await renderCardCompositeToPng({
+        backgroundImage: backgroundImageUrl,
+        qrCodeDataUrl: qrCodeDataUrlFresh,
+        metrics: exportMetrics,
         backgroundColor: "#14120B",
+        scale: CARD_HTML_CAPTURE_SCALE,
       });
 
       const fileName = `001_${sanitizeFileName(card.data.Name)}_business_card.png`;
       downloadCanvasAsPNG(dataUrl, fileName);
     } catch (error) {
       console.error("Error downloading card:", error);
-      alert("Error downloading card");
-    } finally {
-      setCardToDownload(null);
+      toast.error("Couldn’t download this card.");
     }
   };
 
   const downloadAllCards = async () => {
     if (config.generatedCards.length === 0) return;
 
-    // Check if File System Access API is available
-    const useFileSystemAPI = 'showDirectoryPicker' in window;
+    const useFileSystemAPI = "showDirectoryPicker" in window;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let dirHandle: any = null;
 
-    // Prompt user to select directory FIRST
     if (useFileSystemAPI) {
       try {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         dirHandle = await (window as any).showDirectoryPicker({
-          mode: 'readwrite',
+          mode: "readwrite",
         });
       } catch (error) {
         console.error("Directory selection cancelled:", error);
-        return; // User cancelled
+        return;
       }
     } else {
-      // Warn user about multiple downloads
       const confirmed = confirm(
         `Your browser doesn't support directory selection. ${config.generatedCards.length} files will be downloaded individually to your Downloads folder. Continue?`
       );
@@ -192,172 +324,85 @@ function App() {
     setIsProcessing(true);
     setDownloadProgress(0);
 
+    const metrics = getExportLayoutMetrics(config.frontCardLayout);
+    const { qrCodeColor, brandingSvg, generatedCards } = config;
+
+    const reportProgress = (percent: number) => {
+      startTransition(() => setDownloadProgress(percent));
+    };
+
     try {
       let successCount = 0;
 
-      // Load background image once
-      const bgImage = new Image();
-      bgImage.crossOrigin = "anonymous";
-      await new Promise<void>((resolve, reject) => {
-        bgImage.onload = () => resolve();
-        bgImage.onerror = reject;
-        bgImage.src = backgroundImageUrl;
-      });
-
-      // Process and save each card one by one
-      for (let i = 0; i < config.generatedCards.length; i++) {
-        const card = config.generatedCards[i];
-
-        // Update progress
-        const progress = Math.round(
-          ((i + 1) / config.generatedCards.length) * 100
+      for (let i = 0; i < generatedCards.length; i++) {
+        const card = generatedCards[i];
+        reportProgress(
+          Math.round(((i + 1) / generatedCards.length) * 100)
         );
-        setDownloadProgress(progress);
 
         try {
-          // Create a temporary container for rendering the QR code
-          const tempContainer = document.createElement("div");
-          tempContainer.style.position = "absolute";
-          tempContainer.style.left = "-9999px";
-          tempContainer.style.width = "400px";
-          tempContainer.style.height = "400px";
-          document.body.appendChild(tempContainer);
+          const qrCodeDataUrlFresh = await generateQRCodeDataUrl(
+            card.data.URL,
+            {
+              colors: { dark: qrCodeColor, light: "none" },
+              size: 400,
+              margin: 2,
+              errorCorrectionLevel: "H",
+              roundedCorners: true,
+              centerImage: brandingSvg ?? undefined,
+              centerImageSize: 20,
+            }
+          );
 
-          // Use React to render QR code into temp container
-          const imageSettings = config.brandingSvg
-            ? {
-                src: config.brandingSvg,
-                width: 80 * (38 / 44),
-                height: 80,
-                excavate: true,
-              }
-            : undefined;
-
-          const legacyRoot = ReactDOM.createRoot(tempContainer);
-          
-          await new Promise<void>((resolve) => {
-            legacyRoot.render(
-              <QRCodeSVG
-                value={card.data.URL}
-                size={400}
-                level="H"
-                marginSize={2}
-                fgColor={config.qrCodeColor}
-                bgColor="transparent"
-                imageSettings={imageSettings}
-              />
-            );
-            setTimeout(() => resolve(), 300);
+          const dataUrl = await renderCardCompositeToPng({
+            backgroundImage: backgroundImageUrl,
+            qrCodeDataUrl: qrCodeDataUrlFresh,
+            metrics,
+            backgroundColor: "#14120B",
+            scale: CARD_HTML_CAPTURE_SCALE,
           });
 
-          // Get the SVG element
-          const svgElement = tempContainer.querySelector("svg");
-          if (!svgElement) {
-            throw new Error("QR code SVG not found");
-          }
+          const fileName = `${String(i + 1).padStart(3, "0")}_${sanitizeFileName(card.data.Name)}_business_card.png`;
 
-          // Wait for any images inside the SVG to load (branding)
-          const images = svgElement.querySelectorAll("image");
-          if (images.length > 0) {
-            await Promise.all(
-              Array.from(images).map(() => {
-                return new Promise<void>((resolve) => {
-                  setTimeout(() => resolve(), 100);
-                });
-              })
-            );
-          }
-
-          // Convert SVG to data URL
-          const svgData = new XMLSerializer().serializeToString(svgElement);
-          const svgDataUrl = `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svgData)))}`;
-
-          // Load QR code image
-          const qrImage = new Image();
-          await new Promise<void>((resolve, reject) => {
-            qrImage.onload = () => resolve();
-            qrImage.onerror = reject;
-            qrImage.src = svgDataUrl;
-          });
-
-          // Create canvas and render card
-          const canvas = document.createElement("canvas");
-          canvas.width = 576;
-          canvas.height = 1008;
-          const ctx = canvas.getContext("2d");
-          
-          if (!ctx) {
-            throw new Error("Could not get canvas context");
-          }
-
-          // Draw background
-          ctx.fillStyle = "#14120B";
-          ctx.fillRect(0, 0, canvas.width, canvas.height);
-          ctx.drawImage(bgImage, 0, 0, canvas.width, canvas.height);
-
-          // Draw QR code (centered)
-          const qrSize = 400;
-          const x = (canvas.width - qrSize) / 2;
-          const y = (canvas.height - qrSize) / 2;
-          ctx.drawImage(qrImage, x, y, qrSize, qrSize);
-
-          // Convert to data URL
-          const dataUrl = canvas.toDataURL("image/png", 1.0);
-          
-          if (dataUrl.length < 1000) {
-            throw new Error("Generated image is too small/empty");
-          }
-
-          const fileName = `${String(i + 1).padStart(3, '0')}_${sanitizeFileName(card.data.Name)}_business_card.png`;
-
-          // Save file immediately after generation
           if (useFileSystemAPI && dirHandle) {
-            // Convert data URL to blob
             const response = await fetch(dataUrl);
             const blob = await response.blob();
-            
-            // Create file in the directory
-            const fileHandle = await dirHandle.getFileHandle(fileName, { create: true });
+            const fileHandle = await dirHandle.getFileHandle(fileName, {
+              create: true,
+            });
             const writable = await fileHandle.createWritable();
             await writable.write(blob);
             await writable.close();
-            
-            console.log(`💾 Saved ${i + 1}/${config.generatedCards.length}: ${fileName} (${Math.round(dataUrl.length / 1024)}KB)`);
           } else {
-            // Fallback: download using browser
-            const link = document.createElement('a');
+            const link = document.createElement("a");
             link.href = dataUrl;
             link.download = fileName;
             link.click();
-            
-            console.log(`⬇️ Downloaded ${i + 1}/${config.generatedCards.length}: ${fileName} (${Math.round(dataUrl.length / 1024)}KB)`);
-            
-            // Small delay between downloads to avoid browser blocking
-            await new Promise(resolve => setTimeout(resolve, 150));
+            await new Promise((resolve) => setTimeout(resolve, 150));
           }
 
           successCount++;
-
-          // Clean up temp container
-          legacyRoot.unmount();
-          document.body.removeChild(tempContainer);
         } catch (error) {
           console.error(`✗ Error processing card ${i + 1}:`, error);
         }
       }
 
-      console.log(`\n✅ Complete: ${successCount}/${config.generatedCards.length} cards saved successfully`);
-      
       if (successCount > 0) {
-        alert(`Successfully saved ${successCount} out of ${config.generatedCards.length} cards!`);
+        if (successCount === generatedCards.length) {
+          toast.success(`Saved ${successCount} cards.`);
+        } else {
+          toast.warning(
+            `Saved ${successCount} of ${generatedCards.length} cards.`
+          );
+        }
       } else {
-        alert("No cards were generated. Please check the console for errors.");
+        toast.error("No cards were saved. Check the console for details.");
       }
 
       setDownloadProgress(100);
     } catch (error) {
       console.error("Error downloading cards:", error);
-      alert("Error downloading cards");
+      toast.error("Bulk download failed.");
     } finally {
       setIsProcessing(false);
       setDownloadProgress(0);
@@ -376,26 +421,23 @@ function App() {
       const result = await generateTabloidPdfs({
         brandingSvg: config.brandingSvg,
         backgroundImage: backgroundImageUrl,
+        backBackgroundImage: backBackgroundForTabloidUrl,
         backSideImage: config.backSideImage,
         backSideSizePercent: config.backSideSizePercent,
         qrColor: config.qrCodeColor,
         urls,
+        frontCardLayout: config.frontCardLayout,
         onProgress: (percent) => setTabloidProgress(percent),
       });
 
-      // Download combined PDF (back page + QR front pages)
       downloadBlob(result.combinedBlob, "tabloid-cards.pdf");
 
-      alert(
-        `Successfully generated tabloid PDF!\n` +
-          `- Total pages: ${result.pageCount}\n` +
-          `- Page 1: Back side (24 cards)\n` +
-          `- Pages 2-${result.pageCount}: QR fronts (${result.qrPageCount} pages)\n` +
-          `- ${result.slotsPerPage} cards per page`
+      toast.success(
+        `Tabloid PDF ready — ${result.pageCount} pages (${result.qrPageCount} QR pages).`
       );
     } catch (error) {
       console.error("Error generating tabloid PDFs:", error);
-      alert("Error generating tabloid PDFs. Check console for details.");
+      toast.error("Couldn’t generate tabloid PDF. Check the console.");
     } finally {
       setIsTabloidProcessing(false);
       setTabloidProgress(0);
@@ -403,92 +445,69 @@ function App() {
   };
 
   const backgroundImageUrl = config.backgroundImage || DEFAULT_BACKGROUND;
+  const backBackgroundForPreview =
+    config.backBackgroundSameAsFront || config.backBackgroundImage
+      ? config.backBackgroundSameAsFront
+        ? backgroundImageUrl
+        : config.backBackgroundImage
+      : null;
+  const backBackgroundForTabloidUrl = config.backBackgroundSameAsFront
+    ? backgroundImageUrl
+    : config.backBackgroundImage ?? createSolidColorDataUrl(EMPTY_BACK_COLOR);
 
   return (
-    <div className="flex flex-col h-screen overflow-hidden bg-cursor-bg text-cursor-text">
+    <div className="flex h-screen flex-col overflow-hidden bg-cursor-bg text-cursor-text">
       <Navbar />
-      <div className="flex flex-1 overflow-hidden md:flex-row flex-col">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden md:flex-row">
         <ConfigurationPanel
-        csvData={config.csvData}
-        backgroundImage={config.backgroundImage}
-        qrCodeColor={config.qrCodeColor}
-        brandingSvg={config.brandingSvg}
-        backSideImage={config.backSideImage}
-        backSideSizePercent={config.backSideSizePercent}
-        onBackSideImageChange={handleBackSideImageChange}
-        onBackSideSizeChange={handleBackSideSizeChange}
-        isGenerating={isGenerating}
-        isProcessing={isProcessing}
-        downloadProgress={downloadProgress}
-        generatedCardsCount={config.generatedCards.length}
-        slotsPerTabloid={tabloidLayout.slotsPerPage}
-        isTabloidProcessing={isTabloidProcessing}
-        tabloidProgress={tabloidProgress}
-        onCSVUpload={handleCSVUpload}
-        onBackgroundImageChange={handleBackgroundImageChange}
-        onQRCodeColorChange={handleQRCodeColorChange}
-        onBrandingSvgChange={handleBrandingSvgChange}
-        onGenerate={generateCards}
-        onDownloadAll={downloadAllCards}
-        onDownloadTabloid={downloadTabloidPdfs}
-      />
+          csvData={config.csvData}
+          backgroundImage={config.backgroundImage}
+          resolvedFrontBackgroundUrl={backgroundImageUrl}
+          backBackgroundImage={config.backBackgroundImage}
+          backBackgroundSameAsFront={config.backBackgroundSameAsFront}
+          qrCodeColor={config.qrCodeColor}
+          brandingSvg={config.brandingSvg}
+          backSideImage={config.backSideImage}
+          backSideSizePercent={config.backSideSizePercent}
+          cardOrientation={config.frontCardLayout.orientation}
+          onCardOrientationChange={handleCardOrientationChange}
+          onBackBackgroundSameAsFrontChange={
+            handleBackBackgroundSameAsFrontChange
+          }
+          onBackBackgroundImageChange={handleBackBackgroundImageChange}
+          onBackSideImageChange={handleBackSideImageChange}
+          onBackSideSizeChange={handleBackSideSizeChange}
+          isGenerating={isGenerating}
+          isProcessing={isProcessing}
+          downloadProgress={downloadProgress}
+          generatedCardsCount={config.generatedCards.length}
+          slotsPerTabloid={tabloidLayout.slotsPerPage}
+          isTabloidProcessing={isTabloidProcessing}
+          tabloidProgress={tabloidProgress}
+          onCSVUpload={handleCSVUpload}
+          onBackgroundImageChange={handleBackgroundImageChange}
+          onQRCodeColorChange={handleQRCodeColorChange}
+          onBrandingSvgChange={handleBrandingSvgChange}
+          onGenerate={generateCards}
+          onDownloadAll={downloadAllCards}
+          onDownloadTabloid={downloadTabloidPdfs}
+        />
 
-      <PreviewPanel
-        generatedCards={config.generatedCards}
-        backgroundImage={backgroundImageUrl}
-        qrColor={config.qrCodeColor}
-        brandingSvg={config.brandingSvg}
-        backSideImage={config.backSideImage}
-        backSideSizePercent={config.backSideSizePercent}
-        onDownloadCard={downloadCard}
+        <PreviewPanel
+          generatedCards={config.generatedCards}
+          frontBackgroundImage={backgroundImageUrl}
+          backBackgroundImage={backBackgroundForPreview}
+          qrColor={config.qrCodeColor}
+          brandingSvg={config.brandingSvg}
+          backSideImage={config.backSideImage}
+          backSideSizePercent={config.backSideSizePercent}
+          frontCardLayout={config.frontCardLayout}
+          onFrontQrLayoutChange={handleFrontQrLayoutChange}
+          onDownloadCard={downloadCard}
         />
       </div>
-
-      {/* Hidden card for html2canvas */}
-      {cardToDownload && (
-        <div
-          ref={hiddenCardRef}
-          style={{
-            position: "absolute",
-            left: "-9999px",
-            top: "-9999px",
-            width: "576px",
-            height: "1008px",
-            backgroundImage: `url(${backgroundImageUrl})`,
-            backgroundSize: "cover",
-            backgroundPosition: "center",
-            backgroundRepeat: "no-repeat",
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: "60px",
-            boxSizing: "border-box",
-          }}
-        >
-          <QRCodeSVG
-            value={cardToDownload.data.URL}
-            size={400}
-            level="H"
-            marginSize={2}
-            fgColor={config.qrCodeColor}
-            bgColor="transparent"
-            imageSettings={
-              config.brandingSvg
-                ? {
-                    src: config.brandingSvg,
-                    width: 80 * (38 / 44), // Width scaled to maintain 38:44 aspect ratio
-                    height: 80, // Height at target size
-                    excavate: true,
-                  }
-                : undefined
-            }
-          />
-        </div>
-      )}
     </div>
   );
 }
 
 export default App;
-

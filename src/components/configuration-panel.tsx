@@ -140,7 +140,7 @@ export const ConfigurationPanel = ({
   };
 
   return (
-    <div className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-y-auto overflow-x-hidden bg-cursor-card p-5">
+    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-y-auto overflow-x-hidden bg-cursor-card p-5">
       <header className="mb-5 shrink-0 border-b border-cursor-border pb-4">
         <h1 className="m-0 text-xl font-bold text-balance text-cursor-text">
           Business cards
